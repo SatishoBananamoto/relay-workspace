@@ -7,7 +7,9 @@ name = "relay-discussion"
 version = "0.1.0"
 description = "A minimal multi-agent relay CLI with persisted transcripts."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "intent-to-action @ git+https://github.com/SatishoBananamoto/intent-to-action.git",
+]
 
 [project.optional-dependencies]
 tui = ["prompt_toolkit>=3.0"]

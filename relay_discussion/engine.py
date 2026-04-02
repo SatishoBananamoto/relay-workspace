@@ -32,6 +32,7 @@ class RelayRunner:
         moderator_queue: object | None = None,
         on_commit: object | None = None,
         on_stream_chunk: object | None = None,
+        on_activity: object | None = None,
         workspace_path: Path | None = None,
     ) -> None:
         self.config = config
@@ -39,6 +40,7 @@ class RelayRunner:
         self._store = TranscriptStore(out_path)
         self._moderator_queue = moderator_queue  # ModeratorInputQueue (optional)
         self._on_commit = on_commit  # Callable[[Message], None] (optional)
+        self._on_activity = on_activity  # Callable[[dict], None] (optional)
         self._on_stream_chunk = on_stream_chunk  # Callable[[str], None] (optional)
         self._observer = None  # SessionObserver (optional)
         self._workspace_path = workspace_path
@@ -161,6 +163,13 @@ class RelayRunner:
             if self._observer:
                 self._observer.on_turn_start(turn, agent.name)
 
+            self._emit_activity({
+                "kind": "thinking",
+                "agent": agent.name,
+                "turn": turn,
+                "provider": agent.provider,
+            })
+
             response, failure_type, failure_reason = self._attempt_with_retry(
                 agent=agent, transcript=messages, turn=turn,
             )
@@ -205,6 +214,16 @@ class RelayRunner:
             )
             policy_result = self._policy.evaluate_turn(agent.name, response, messages)
             action_type = classify_relay_action(agent_message, messages)
+
+            self._emit_activity({
+                "kind": "harness_eval",
+                "agent": agent.name,
+                "turn": turn,
+                "action_type": action_type,
+                "decision": policy_result.decision.value,
+                "allowed": policy_result.allowed,
+                "blockers": [b.detail for b in policy_result.blockers] if policy_result.blockers else [],
+            })
 
             if not policy_result.allowed:
                 self._policy.record_outcome(agent.name, response, "denied", action_type)
@@ -270,6 +289,13 @@ class RelayRunner:
             sequence += 1
             self._policy.record_outcome(agent.name, response, "success", action_type)
 
+            self._emit_activity({
+                "kind": "turn_committed",
+                "agent": agent.name,
+                "turn": turn,
+                "action_type": action_type,
+            })
+
             if self._observer:
                 self._observer.on_turn_end(turn, agent.name, success=True)
 
@@ -306,6 +332,11 @@ class RelayRunner:
 
         peer = self.config.right_agent if agent is self.config.left_agent else self.config.left_agent
         self._workspace_mgr.forward_outbox(agent.name, peer.name)
+
+    def _emit_activity(self, activity: dict) -> None:
+        """Emit an activity event (thinking, harness eval, etc.)."""
+        if self._on_activity is not None:
+            self._on_activity(activity)
 
     def _commit(self, messages: list[Message], message: Message) -> None:
         self._store.append(message)

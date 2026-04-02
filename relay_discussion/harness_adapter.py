@@ -10,7 +10,6 @@ decision wins.
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
@@ -18,8 +17,6 @@ from .models import Message
 from .policy import Decision as RelayDecision, PolicyResult as RelayPolicyResult, Blocker as RelayBlocker, BlockerKind
 from .policy_relay import classify_relay_action, detect_promises
 
-# Import harness — must be importable from the workspace
-sys.path.insert(0, str(__import__("pathlib").Path(__file__).resolve().parent.parent))
 from harness.core import Harness, EvaluationResult
 from harness.intent import IntentClassifier
 from harness.store import InMemoryEffectStore

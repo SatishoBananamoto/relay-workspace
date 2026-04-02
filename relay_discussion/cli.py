@@ -424,6 +424,8 @@ def _build_new_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-limit", action="store_true", help="No turn limit.")
     parser.add_argument("--build", action="store_true", help="Enable build mode with shared workspace.")
     parser.add_argument("--tui", action="store_true", help="Launch split-pane terminal UI.")
+    parser.add_argument("--web", action="store_true", help="Launch web viewer in browser.")
+    parser.add_argument("--port", type=int, default=8411, help="Web viewer port (default: 8411).")
     parser.add_argument("--left-name", help="Left agent name.")
     parser.add_argument("--left-provider", help="Left agent provider.")
     parser.add_argument("--left-model", help="Left agent model.")
@@ -498,18 +500,24 @@ def _cmd_new(argv: list[str]) -> int:
     ws_path = mgr.get_workspace_path(meta.id) if args.build else None
     mgr.update_status(meta.id, "running")
 
+    if args.tui and args.web:
+        print("ERROR: --tui and --web are mutually exclusive.", file=sys.stderr)
+        return 1
+
     if args.tui:
         from .moderator import ModeratorInputQueue
         from .tui import run_relay_with_tui
 
         mq = ModeratorInputQueue()
 
-        def runner_factory(moderator_queue=None, on_commit=None):
+        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None):
             return RelayRunner(
                 config=config,
                 out_path=transcript_path,
                 moderator_queue=moderator_queue,
                 on_commit=on_commit,
+                on_stream_chunk=on_stream_chunk,
+                on_activity=on_activity,
                 workspace_path=ws_path,
             )
 
@@ -519,6 +527,39 @@ def _cmd_new(argv: list[str]) -> int:
                 moderator_queue=mq,
                 session_id=meta.id,
                 topic=args.topic,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            mgr.update_status(meta.id, "paused")
+            return 1
+
+        if result is None:
+            mgr.update_status(meta.id, "paused")
+            return 1
+    elif args.web:
+        from .moderator import ModeratorInputQueue
+        from .web import run_relay_with_web
+
+        mq = ModeratorInputQueue()
+
+        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None):
+            return RelayRunner(
+                config=config,
+                out_path=transcript_path,
+                moderator_queue=moderator_queue,
+                on_commit=on_commit,
+                on_stream_chunk=on_stream_chunk,
+                on_activity=on_activity,
+                workspace_path=ws_path,
+            )
+
+        try:
+            result = run_relay_with_web(
+                runner_factory=runner_factory,
+                moderator_queue=mq,
+                session_id=meta.id,
+                topic=args.topic,
+                port=args.port,
             )
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
@@ -579,6 +620,8 @@ def _cmd_resume(argv: list[str]) -> int:
     parser.add_argument("--no-limit", action="store_true", help="No turn limit.")
     parser.add_argument("--build", action="store_true", help="Enable build mode (if not already).")
     parser.add_argument("--tui", action="store_true", help="Launch split-pane terminal UI.")
+    parser.add_argument("--web", action="store_true", help="Launch web viewer in browser.")
+    parser.add_argument("--port", type=int, default=8411, help="Web viewer port (default: 8411).")
     args = parser.parse_args(argv)
 
     mgr = SessionManager()
@@ -647,18 +690,24 @@ def _cmd_resume(argv: list[str]) -> int:
     starting_count = len(TranscriptStore(transcript_path).read())
     mgr.update_status(session_id, "running")
 
+    if args.tui and args.web:
+        print("ERROR: --tui and --web are mutually exclusive.", file=sys.stderr)
+        return 1
+
     if args.tui:
         from .moderator import ModeratorInputQueue
         from .tui import run_relay_with_tui
 
         mq = ModeratorInputQueue()
 
-        def runner_factory(moderator_queue=None, on_commit=None):
+        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None):
             return RelayRunner(
                 config=config,
                 out_path=transcript_path,
                 moderator_queue=moderator_queue,
                 on_commit=on_commit,
+                on_stream_chunk=on_stream_chunk,
+                on_activity=on_activity,
                 workspace_path=workspace_path,
             )
 
@@ -669,6 +718,39 @@ def _cmd_resume(argv: list[str]) -> int:
                 session_id=session_id,
                 topic=stored_topic,
                 resume=True,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 1
+
+        if result is None:
+            mgr.update_status(session_id, "paused")
+            return 1
+    elif args.web:
+        from .moderator import ModeratorInputQueue
+        from .web import run_relay_with_web
+
+        mq = ModeratorInputQueue()
+
+        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None):
+            return RelayRunner(
+                config=config,
+                out_path=transcript_path,
+                moderator_queue=moderator_queue,
+                on_commit=on_commit,
+                on_stream_chunk=on_stream_chunk,
+                on_activity=on_activity,
+                workspace_path=workspace_path,
+            )
+
+        try:
+            result = run_relay_with_web(
+                runner_factory=runner_factory,
+                moderator_queue=mq,
+                session_id=session_id,
+                topic=stored_topic,
+                resume=True,
+                port=args.port,
             )
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
