@@ -797,19 +797,19 @@ _INDEX_HTML = """<!DOCTYPE html>
         <input type="number" id="lobby-turns" value="4" min="1" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:13px;font-family:inherit">
       </div>
       <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Left Model</label>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-left-label">Agent 1 Model</label>
         <select id="lobby-left-model" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="opus" selected>Opus</option>
-          <option value="sonnet">Sonnet</option>
-          <option value="haiku">Haiku</option>
+          <option value="opus" selected>opus</option>
+          <option value="sonnet">sonnet</option>
+          <option value="haiku">haiku</option>
         </select>
       </div>
       <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Right Model</label>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-right-label">Agent 2 Model</label>
         <select id="lobby-right-model" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="opus">Opus</option>
-          <option value="sonnet" selected>Sonnet</option>
-          <option value="haiku">Haiku</option>
+          <option value="opus">opus</option>
+          <option value="sonnet" selected>sonnet</option>
+          <option value="haiku">haiku</option>
         </select>
       </div>
     </div>
@@ -822,30 +822,30 @@ _INDEX_HTML = """<!DOCTYPE html>
         </div>
       </div>
       <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Left Effort</label>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-left-effort-label">Agent 1 Effort</label>
         <select id="lobby-left-effort" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="max" selected>Max</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
+          <option value="max" selected>max</option>
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
         </select>
       </div>
       <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Right Effort</label>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-right-effort-label">Agent 2 Effort</label>
         <select id="lobby-right-effort" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="max" selected>Max</option>
-          <option value="high">High</option>
-          <option value="medium">Medium</option>
-          <option value="low">Low</option>
+          <option value="max" selected>max</option>
+          <option value="high">high</option>
+          <option value="medium">medium</option>
+          <option value="low">low</option>
         </select>
       </div>
     </div>
     <div style="margin-bottom:12px">
-      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Left agent instruction</label>
+      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-left-instr-label">Agent 1 instruction</label>
       <input type="text" id="lobby-left-instr" placeholder="(optional)" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
     </div>
     <div style="margin-bottom:16px">
-      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Right agent instruction</label>
+      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-right-instr-label">Agent 2 instruction</label>
       <input type="text" id="lobby-right-instr" placeholder="(optional)" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
     </div>
     <div style="display:flex;gap:8px">
@@ -1004,7 +1004,10 @@ function appendMessage(msg) {
   let header = '';
   if (role === 'agent') {
     const turn = msg.metadata && msg.metadata.turn;
-    header = '<span class="turn">Turn ' + turn + '</span> <span class="author">' + escapeHtml(msg.author) + '</span>';
+    const model = msg.metadata && msg.metadata.model || '';
+    const provider = msg.metadata && msg.metadata.provider || '';
+    const modelTag = model ? ' <span style="color:#484f58;font-size:11px">[' + escapeHtml(model) + ']</span>' : '';
+    header = '<span class="turn">Turn ' + turn + '</span> <span class="author">' + escapeHtml(msg.author) + '</span>' + modelTag;
   } else if (role === 'moderator') {
     header = '<span class="author">' + escapeHtml(msg.author) + '</span>' + (kind === 'topic' ? ' <span style="color:#bc8cff">TOPIC</span>' : '');
   } else {
@@ -1431,24 +1434,38 @@ fetch('/state').then(r => r.json()).then(data => {
     agentInfos = data.agents;
     data.agents.forEach(a => registerAgent(a.name));
     buildModelControls(data.agents);
-    // Set lobby dropdowns based on provider
-    if (data.agents[0]) {
-      const lp = data.agents[0].provider;
-      const lSel = document.getElementById('lobby-left-model');
-      if (lp === 'cli-codex') { lSel.innerHTML = '<option>o3</option><option>o4-mini</option><option>gpt-4.1</option>'; }
-      else if (lp === 'mock') { lSel.innerHTML = '<option>mirror</option>'; }
+
+    // Configure lobby for each agent
+    function setupLobbyAgent(agent, side) {
+      const label = document.getElementById('lobby-' + side + '-label');
+      const mSel = document.getElementById('lobby-' + side + '-model');
+      const eLabel = document.getElementById('lobby-' + side + '-effort-label');
+      const eSel = document.getElementById('lobby-' + side + '-effort');
+
+      const iLabel = document.getElementById('lobby-' + side + '-instr-label');
+      if (label) label.textContent = agent.name + ' Model';
+      if (eLabel) eLabel.textContent = agent.name + ' Effort';
+      if (iLabel) iLabel.textContent = agent.name + ' Instruction';
+
+      if (agent.provider === 'cli-claude') {
+        mSel.innerHTML = CLAUDE_MODELS.map(m => '<option value="' + m + '">' + m + '</option>').join('');
+        eSel.innerHTML = CLAUDE_EFFORTS.map(e => '<option value="' + e + '">' + e + '</option>').join('');
+      } else if (agent.provider === 'cli-codex') {
+        mSel.innerHTML = CODEX_MODELS.map(m => '<option value="' + m + '">' + m + '</option>').join('');
+        eSel.innerHTML = CODEX_EFFORTS.map(e => '<option value="' + e + '">' + e + '</option>').join('');
+      } else {
+        mSel.innerHTML = '<option value="mirror">mirror</option>';
+        eSel.style.display = 'none';
+      }
+      // Select current model if known
+      if (agent.model) {
+        for (const opt of mSel.options) {
+          if (opt.value === agent.model) { opt.selected = true; break; }
+        }
+      }
     }
-    if (data.agents[1]) {
-      const rp = data.agents[1].provider;
-      const rSel = document.getElementById('lobby-right-model');
-      if (rp === 'cli-codex') { rSel.innerHTML = '<option>o3</option><option>o4-mini</option><option>gpt-4.1</option>'; }
-      else if (rp === 'mock') { rSel.innerHTML = '<option>mirror</option>'; }
-    }
-    // Hide effort dropdowns for non-Claude agents
-    const lp = data.agents[0] && data.agents[0].provider;
-    const rp = data.agents[1] && data.agents[1].provider;
-    if (lp !== 'cli-claude') document.getElementById('lobby-left-effort').style.display = 'none';
-    if (rp !== 'cli-claude') document.getElementById('lobby-right-effort').style.display = 'none';
+    if (data.agents[0]) setupLobbyAgent(data.agents[0], 'left');
+    if (data.agents[1]) setupLobbyAgent(data.agents[1], 'right');
   }
 });
 
@@ -1535,8 +1552,9 @@ function registerAgent(name) {
 }
 
 const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku'];
-const CODEX_MODELS = ['o3', 'o4-mini', 'gpt-4.1'];
+const CODEX_MODELS = ['gpt-5.4', 'o3', 'o4-mini', 'gpt-4.1'];
 const CLAUDE_EFFORTS = ['max', 'high', 'medium', 'low'];
+const CODEX_EFFORTS = ['xhigh', 'high', 'medium', 'low'];
 
 function buildModelControls(agentInfos) {
   const container = document.getElementById('model-controls');
@@ -1560,10 +1578,11 @@ function buildModelControls(agentInfos) {
       mSel.onchange = () => sendCmd('set_model', {agent: info.name, model: mSel.value});
       row.appendChild(mSel);
     }
-    if (isClaude) {
+    const efforts = isClaude ? CLAUDE_EFFORTS : isCodex ? CODEX_EFFORTS : [];
+    if (efforts.length) {
       const eSel = document.createElement('select');
       eSel.style.cssText = 'padding:3px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px';
-      CLAUDE_EFFORTS.forEach(e => {
+      efforts.forEach(e => {
         const o = document.createElement('option');
         o.value = e; o.textContent = e;
         eSel.appendChild(o);

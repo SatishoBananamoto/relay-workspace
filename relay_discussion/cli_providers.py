@@ -335,10 +335,12 @@ class CliCodexProvider(BaseProvider):
         self,
         *,
         model: str | None = None,
+        effort: str | None = None,
         workspace_path: Path | str | None = None,
         timeout: int | None = None,
     ) -> None:
-        self._model = model  # e.g. "o3", "o4-mini", "gpt-4.1"
+        self._model = model  # e.g. "gpt-5.4", "o3", "o4-mini"
+        self._effort = effort  # e.g. "xhigh", "high", "medium", "low"
         self._workspace_path = Path(workspace_path) if workspace_path else None
         self._timeout = timeout
         self._workspace_mgr = None
@@ -352,6 +354,9 @@ class CliCodexProvider(BaseProvider):
 
     def set_model(self, model: str) -> None:
         self._model = model
+
+    def set_effort(self, effort: str) -> None:
+        self._effort = effort
 
     @property
     def on_tool_event(self):
@@ -393,6 +398,8 @@ class CliCodexProvider(BaseProvider):
             cmd = ["codex", "exec", "-", "--skip-git-repo-check", "--full-auto"]
             if self._model:
                 cmd += ["-m", self._model]
+            if self._effort:
+                cmd += ["-c", f"model_reasoning_effort={self._effort}"]
             if self._workspace_path:
                 cmd += ["--add-dir", str(self._workspace_path)]
         else:
