@@ -70,7 +70,7 @@ class RelayRunner:
             kwargs: dict[str, object] = {}
             if agent.provider in ("cli-claude", "cli-codex") and self._workspace_path:
                 kwargs["workspace_path"] = self._workspace_path
-            if agent.provider == "cli-claude" and agent.model and agent.model != "mirror":
+            if agent.provider in ("cli-claude", "cli-codex") and agent.model and agent.model != "mirror":
                 kwargs["model"] = agent.model
             provider = get_provider(agent.provider, **kwargs)
             # Wire tool event callback if provider supports it

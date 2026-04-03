@@ -92,11 +92,13 @@ class WebViewer:
         topic: str = "",
         host: str = "127.0.0.1",
         port: int = 8411,
+        agents: list[dict] | None = None,
     ) -> None:
         self._queue = moderator_queue
         self._bus = EventBus()
         self._session_id = session_id
         self._topic = topic
+        self._agents = agents or []  # [{name, provider, model}]
         self._host = host
         self._port = port
         self._status = "starting"
@@ -188,6 +190,7 @@ class WebViewer:
         return {
             "session_id": self._session_id,
             "topic": self._topic,
+            "agents": self._agents,
             **self._status_dict(),
         }
 
@@ -347,6 +350,7 @@ def run_relay_with_web(
     resume: bool = False,
     host: str = "127.0.0.1",
     port: int = 8411,
+    agents: list[dict] | None = None,
 ) -> object:
     """Run the relay engine in a background thread with web viewer in foreground.
 
@@ -354,6 +358,7 @@ def run_relay_with_web(
     """
     viewer = WebViewer(
         moderator_queue=moderator_queue,
+        agents=agents or [],
         session_id=session_id,
         topic=topic,
         host=host,
@@ -1412,15 +1417,38 @@ function handleActivity(data) {
   }
 }
 
-// Initialize
+// Initialize — build controls immediately from state
 fetch('/state').then(r => r.json()).then(data => {
   document.getElementById('s-session').textContent = data.session_id || '---';
   updateStatus(data);
   // Populate lobby
   document.getElementById('lobby-topic').textContent = data.topic || '';
-  // Show lobby only if status is 'lobby' (not resume)
   if (data.status !== 'lobby') {
     document.getElementById('lobby').style.display = 'none';
+  }
+  // Build controls from agent info
+  if (data.agents && data.agents.length) {
+    agentInfos = data.agents;
+    data.agents.forEach(a => registerAgent(a.name));
+    buildModelControls(data.agents);
+    // Set lobby dropdowns based on provider
+    if (data.agents[0]) {
+      const lp = data.agents[0].provider;
+      const lSel = document.getElementById('lobby-left-model');
+      if (lp === 'cli-codex') { lSel.innerHTML = '<option>o3</option><option>o4-mini</option><option>gpt-4.1</option>'; }
+      else if (lp === 'mock') { lSel.innerHTML = '<option>mirror</option>'; }
+    }
+    if (data.agents[1]) {
+      const rp = data.agents[1].provider;
+      const rSel = document.getElementById('lobby-right-model');
+      if (rp === 'cli-codex') { rSel.innerHTML = '<option>o3</option><option>o4-mini</option><option>gpt-4.1</option>'; }
+      else if (rp === 'mock') { rSel.innerHTML = '<option>mirror</option>'; }
+    }
+    // Hide effort dropdowns for non-Claude agents
+    const lp = data.agents[0] && data.agents[0].provider;
+    const rp = data.agents[1] && data.agents[1].provider;
+    if (lp !== 'cli-claude') document.getElementById('lobby-left-effort').style.display = 'none';
+    if (rp !== 'cli-claude') document.getElementById('lobby-right-effort').style.display = 'none';
   }
 });
 
@@ -1484,6 +1512,7 @@ evtSource.addEventListener('status', (e) => {
 // Track agents from messages AND activity events
 const knownAgents = new Set();
 let controlsBuilt = false;
+let agentInfos = [];
 
 function registerAgent(name) {
   if (!name || knownAgents.has(name)) return;
@@ -1498,37 +1527,53 @@ function registerAgent(name) {
     controlsBuilt = true;
     buildSteeringBtns([...knownAgents]);
     buildPermPanels([...knownAgents]);
-    buildModelControls([...knownAgents]);
+    if (!agentInfos.length) {
+      // Fallback: no provider info, show generic controls
+      buildModelControls([...knownAgents].map(n => ({name: n, provider: 'unknown'})));
+    }
   }
 }
 
-function buildModelControls(agents) {
+const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku'];
+const CODEX_MODELS = ['o3', 'o4-mini', 'gpt-4.1'];
+const CLAUDE_EFFORTS = ['max', 'high', 'medium', 'low'];
+
+function buildModelControls(agentInfos) {
   const container = document.getElementById('model-controls');
   container.innerHTML = '';
-  const models = ['opus', 'sonnet', 'haiku'];
-  const efforts = ['max', 'high', 'medium', 'low'];
-  agents.forEach(agent => {
+  agentInfos.forEach(info => {
+    const isClaude = info.provider === 'cli-claude';
+    const isCodex = info.provider === 'cli-codex';
+    const models = isClaude ? CLAUDE_MODELS : isCodex ? CODEX_MODELS : [];
     const row = document.createElement('div');
     row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:12px';
-    row.innerHTML = '<span style="width:50px;color:#8b949e">' + escapeHtml(agent) + '</span>';
-    const mSel = document.createElement('select');
-    mSel.style.cssText = 'padding:3px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px';
-    models.forEach(m => {
-      const o = document.createElement('option');
-      o.value = m; o.textContent = m.charAt(0).toUpperCase() + m.slice(1);
-      mSel.appendChild(o);
-    });
-    mSel.onchange = () => sendCmd('set_model', {agent, model: mSel.value});
-    row.appendChild(mSel);
-    const eSel = document.createElement('select');
-    eSel.style.cssText = 'padding:3px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px';
-    efforts.forEach(e => {
-      const o = document.createElement('option');
-      o.value = e; o.textContent = e.charAt(0).toUpperCase() + e.slice(1);
-      eSel.appendChild(o);
-    });
-    eSel.onchange = () => sendCmd('set_effort', {agent, effort: eSel.value});
-    row.appendChild(eSel);
+    row.innerHTML = '<span style="width:50px;color:#8b949e">' + escapeHtml(info.name) + '</span>';
+    if (models.length) {
+      const mSel = document.createElement('select');
+      mSel.style.cssText = 'padding:3px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px';
+      models.forEach(m => {
+        const o = document.createElement('option');
+        o.value = m; o.textContent = m;
+        if (m === info.model) o.selected = true;
+        mSel.appendChild(o);
+      });
+      mSel.onchange = () => sendCmd('set_model', {agent: info.name, model: mSel.value});
+      row.appendChild(mSel);
+    }
+    if (isClaude) {
+      const eSel = document.createElement('select');
+      eSel.style.cssText = 'padding:3px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px';
+      CLAUDE_EFFORTS.forEach(e => {
+        const o = document.createElement('option');
+        o.value = e; o.textContent = e;
+        eSel.appendChild(o);
+      });
+      eSel.onchange = () => sendCmd('set_effort', {agent: info.name, effort: eSel.value});
+      row.appendChild(eSel);
+    }
+    if (!isClaude && !isCodex) {
+      row.innerHTML += '<span style="color:#484f58;font-size:11px">(mock)</span>';
+    }
     container.appendChild(row);
   });
 }

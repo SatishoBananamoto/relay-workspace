@@ -580,6 +580,10 @@ def _cmd_new(argv: list[str]) -> int:
                 session_id=meta.id,
                 topic=args.topic,
                 port=args.port,
+                agents=[
+                    {"name": config.left_agent.name, "provider": config.left_agent.provider, "model": config.left_agent.model},
+                    {"name": config.right_agent.name, "provider": config.right_agent.provider, "model": config.right_agent.model},
+                ],
             )
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
@@ -771,6 +775,10 @@ def _cmd_resume(argv: list[str]) -> int:
                 topic=stored_topic,
                 resume=True,
                 port=args.port,
+                agents=[
+                    {"name": config.left_agent.name, "provider": config.left_agent.provider, "model": config.left_agent.model},
+                    {"name": config.right_agent.name, "provider": config.right_agent.provider, "model": config.right_agent.model},
+                ],
             )
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
