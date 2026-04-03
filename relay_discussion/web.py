@@ -1114,6 +1114,14 @@ function handleToolEvent(data) {
     const cur = document.getElementById('tool-current');
     if (cur) cur.removeAttribute('id');
     currentToolName = '';
+  } else if (evt === 'reasoning') {
+    const line = document.createElement('div');
+    line.className = 'tool-line';
+    line.style.color = '#d29922';
+    line.innerHTML = '💭 <span style="color:#8b949e">' + escapeHtml(data.text || '') + '</span>';
+    toolActivity.appendChild(line);
+    toolActivity.scrollTop = toolActivity.scrollHeight;
+    thinkingText.textContent = (data.agent || '') + ' reasoning...';
   } else if (evt === 'usage') {
     const line = document.createElement('div');
     line.className = 'tool-line';

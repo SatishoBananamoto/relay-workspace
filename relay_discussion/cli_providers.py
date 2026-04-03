@@ -462,6 +462,11 @@ class CliCodexProvider(BaseProvider):
                         })
                     elif etype == "item.completed" and item.get("type") == "command_execution":
                         cb({"event": "tool_end"})
+                    elif etype == "item.completed" and item.get("type") == "reasoning":
+                        cb({
+                            "event": "reasoning",
+                            "text": item.get("text", "")[:200],
+                        })
                     elif etype == "turn.completed":
                         usage = event.get("usage")
                         if usage:
