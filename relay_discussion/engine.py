@@ -57,6 +57,7 @@ class RelayRunner:
         self._skip_agents: set[str] = set()
         self._force_next: str | None = None
         self._pending_approval: dict | None = None
+        self._pending_efforts: dict[str, str] = {}  # {side: effort} for provider creation
         self._fault_scripts = {
             id(config.left_agent): list(config.left_agent.fault_script),
             id(config.right_agent): list(config.right_agent.fault_script),
@@ -72,6 +73,9 @@ class RelayRunner:
                 kwargs["workspace_path"] = self._workspace_path
             if agent.provider in ("cli-claude", "cli-codex") and agent.model and agent.model != "mirror":
                 kwargs["model"] = agent.model
+            # Apply any pending effort setting
+            if side in self._pending_efforts:
+                kwargs["effort"] = self._pending_efforts.pop(side)
             provider = get_provider(agent.provider, **kwargs)
             # Wire tool event callback if provider supports it
             if hasattr(provider, "on_tool_event") and self._on_activity:
@@ -495,6 +499,9 @@ class RelayRunner:
                 provider = self._providers.get(side)
                 if provider and hasattr(provider, "set_effort"):
                     provider.set_effort(effort)
+                else:
+                    # Provider not created yet — store for when it is
+                    self._pending_efforts[side] = effort
             except ValueError:
                 pass
 

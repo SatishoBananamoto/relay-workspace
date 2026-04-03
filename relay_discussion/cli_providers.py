@@ -285,15 +285,18 @@ class CliClaudeProvider(BaseProvider):
                 if etype == "result":
                     self._session_id = event.get("session_id") or self._session_id
 
-                # Stream content deltas
-                if etype == "content_block_delta":
-                    delta = event.get("delta", {})
-                    text = delta.get("text", "")
-                    if text:
-                        full_text += text
-                        yield text
+                # Stream-json with --verbose uses full message events, not content_block deltas
+                # Format: {"type": "assistant", "message": {"content": [{"type": "text", "text": "..."}]}}
+                if etype == "assistant":
+                    msg = event.get("message", {})
+                    for block in msg.get("content", []):
+                        if block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text:
+                                full_text += text
+                                yield text
 
-                # Also handle result text (final)
+                # Also handle result text (final fallback)
                 if etype == "result" and not full_text:
                     result_text = event.get("result", "")
                     if result_text:
@@ -302,28 +305,28 @@ class CliClaudeProvider(BaseProvider):
                 # Forward tool events to callback
                 cb = self.on_tool_event
                 if cb is not None:
-                    if etype == "content_block_start":
-                        ctype = event.get("content_block", {}).get("type", "")
-                        if ctype == "tool_use":
-                            cb({
-                                "event": "tool_start",
-                                "tool": event["content_block"].get("name", "?"),
-                                "id": event["content_block"].get("id", ""),
-                            })
-                    elif etype == "content_block_delta":
-                        delta = event.get("delta", {})
-                        if delta.get("type") == "input_json_delta":
-                            cb({
-                                "event": "tool_input",
-                                "partial": delta.get("partial_json", ""),
-                            })
-                    elif etype == "content_block_stop":
-                        cb({"event": "tool_end"})
+                    if etype == "assistant":
+                        msg = event.get("message", {})
+                        for block in msg.get("content", []):
+                            if block.get("type") == "tool_use":
+                                cb({
+                                    "event": "tool_start",
+                                    "tool": block.get("name", "?"),
+                                    "id": block.get("id", ""),
+                                    "input": json.dumps(block.get("input", {}))[:100],
+                                })
+                    elif etype == "user":
+                        msg = event.get("message", {})
+                        for block in msg.get("content", []):
+                            if block.get("type") == "tool_result":
+                                cb({"event": "tool_end"})
                     elif etype == "result":
-                        # Include cost/usage info if present
-                        usage = event.get("usage") or event.get("total_usage")
+                        usage = event.get("usage")
                         if usage:
                             cb({"event": "usage", "usage": usage})
+                        model_usage = event.get("modelUsage", {})
+                        if model_usage:
+                            cb({"event": "model_info", "models": model_usage})
         finally:
             proc.wait(timeout=10)
 
@@ -435,17 +438,22 @@ class CliCodexProvider(BaseProvider):
                     self._session_id = event["thread_id"]
 
                 # Forward tool events if callback is set
+                # Codex format: item.started/item.completed with item.type = "command_execution"
                 if cb is not None:
-                    if etype == "function_call":
+                    item = event.get("item", {})
+                    if etype == "item.started" and item.get("type") == "command_execution":
                         cb({
                             "event": "tool_start",
-                            "tool": event.get("name", "?"),
-                            "id": event.get("call_id", ""),
+                            "tool": "Bash",
+                            "id": item.get("id", ""),
+                            "input": item.get("command", "")[:100],
                         })
-                    elif etype == "function_call_output":
+                    elif etype == "item.completed" and item.get("type") == "command_execution":
                         cb({"event": "tool_end"})
-                    elif etype in ("message.delta", "message.completed"):
-                        pass  # text output handled via output file
+                    elif etype == "turn.completed":
+                        usage = event.get("usage")
+                        if usage:
+                            cb({"event": "usage", "usage": usage})
 
             proc.wait(timeout=30)
         except Exception as exc:

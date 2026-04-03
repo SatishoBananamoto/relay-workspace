@@ -1,43 +1,60 @@
 # Tool Event Mapping — CLI Provider → Web Viewer
 
 How agent subprocess JSONL events map to web viewer activity events.
+**Verified against live output on 2026-04-03.**
 
-## Claude (`claude -p --output-format stream-json`)
+## Claude (`claude -p --output-format stream-json --verbose`)
 
 | Subprocess JSONL `type` | Parsed field | Web viewer event | What it shows |
 |------------------------|-------------|-----------------|---------------|
-| `content_block_start` (where `content_block.type == "tool_use"`) | `content_block.name`, `content_block.id` | `tool_start` | "Claude using **Read**" |
-| `content_block_delta` (where `delta.type == "input_json_delta"`) | `delta.partial_json` | `tool_input` | Partial tool input preview (first 100 chars) |
-| `content_block_stop` | — | `tool_end` | Tool call finished |
-| `content_block_delta` (where `delta.text` exists) | `delta.text` | SSE `stream` event | Live text streaming to conversation pane |
-| `result` | `session_id`, `result`, `usage`/`total_usage` | `usage` event + session ID capture | Token counts, session persistence |
+| `assistant` (content has `tool_use`) | `message.content[].name`, `.id`, `.input` | `tool_start` | "Claude using **Read**" + input preview |
+| `user` (content has `tool_result`) | — | `tool_end` | Tool call finished |
+| `assistant` (content has `text`) | `message.content[].text` | SSE `stream` event | Live text streaming |
+| `result` | `session_id`, `result`, `usage`, `modelUsage` | `usage` + `model_info` events | Token counts, model version |
 
-### Known Claude stream-json event types (not all forwarded):
-- `message_start` — message metadata, not forwarded
-- `content_block_start` — tool_use or text block start
-- `content_block_delta` — incremental content (text or tool input)
-- `content_block_stop` — block complete
-- `message_delta` — stop reason, not forwarded
-- `message_stop` — message complete, not forwarded
-- `result` — final result with session_id and usage
+### Actual Claude stream-json event types (verified):
+```jsonl
+{"type":"system","subtype":"init","session_id":"...","tools":[...],"model":"claude-sonnet-4-6",...}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"..."}}],...}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"..."}],...}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"The answer is..."}],...}}
+{"type":"result","result":"The answer is...","session_id":"...","usage":{...},"modelUsage":{...}}
+```
+
+**Note:** With `--verbose`, Claude emits full message objects (not `content_block_delta` events). Each `assistant` message contains the complete content array.
 
 ## Codex (`codex exec --json`)
 
 | Subprocess JSONL `type` | Parsed field | Web viewer event | What it shows |
 |------------------------|-------------|-----------------|---------------|
-| `thread.started` | `thread_id` | (internal) | Session ID capture for `--resume` |
-| `function_call` | `name`, `call_id` | `tool_start` | "Codex using **Read**" |
-| `function_call_output` | — | `tool_end` | Tool call finished |
-| `turn.started` | — | not forwarded | — |
-| `turn.completed` | `usage` | not forwarded (could add) | — |
-| `item.completed` | `item.text` | not forwarded (output via file) | — |
-| `message.delta` | — | not forwarded | — |
-| `message.completed` | — | not forwarded | — |
+| `thread.started` | `thread_id` | (internal) | Session ID for `resume` |
+| `item.started` (where `item.type == "command_execution"`) | `item.command` | `tool_start` | "Codex using **Bash** — `rg -n ...`" |
+| `item.completed` (where `item.type == "command_execution"`) | `item.exit_code`, `item.aggregated_output` | `tool_end` | Tool call finished |
+| `item.completed` (where `item.type == "agent_message"`) | `item.text` | not forwarded (output via file) | — |
+| `turn.completed` | `usage` | `usage` event | Token counts |
 
-### Notes on Codex:
-- Response text comes from the `-o` output file, not from stdout events
-- Tool event type names (`function_call`) are assumed based on OpenAI Codex CLI patterns — **verify against actual output when running live**
-- Codex does not stream text incrementally (no `supports_streaming`) — only tool events stream
+### Actual Codex JSONL event types (verified):
+```jsonl
+{"type":"thread.started","thread_id":"019d51d4-..."}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"..."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc \"rg ...\"","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"...","aggregated_output":"...","exit_code":0,"status":"completed"}}
+{"type":"turn.completed","usage":{"input_tokens":113687,"cached_input_tokens":78976,"output_tokens":399}}
+```
+
+**Note:** Codex only uses `command_execution` (Bash) — it doesn't have separate Read/Edit/Grep tools like Claude. All file operations go through shell commands.
+
+## Codex Config (from `~/.codex/config.toml`)
+
+```toml
+model = "gpt-5.4"
+model_reasoning_effort = "xhigh"
+```
+
+Available models: `gpt-5.4`, `o3`, `o4-mini`, `gpt-4.1`
+Available effort: `xhigh`, `high`, `medium`, `low`
+Set via: `-m <model>` and `-c model_reasoning_effort=<effort>`
 
 ## Web Viewer Activity Event Format
 
@@ -49,36 +66,21 @@ All tool events are wrapped by the engine as:
   "agent": "Claude",
   "event": "tool_start",
   "tool": "Read",
-  "id": "toolu_abc123"
+  "id": "toolu_abc123",
+  "input": "{\"file_path\":\"/home/..."
 }
 ```
 
-The `kind` field is always `"tool_event"`. The `event` subfield is one of:
-
 | `event` | Fields | Meaning |
 |---------|--------|---------|
-| `tool_start` | `tool`, `id` | Agent started using a tool |
-| `tool_input` | `partial` | Incremental JSON input to the tool (Claude only) |
+| `tool_start` | `tool`, `id`, `input` (first 100 chars) | Agent started using a tool |
 | `tool_end` | — | Tool call completed |
 | `usage` | `usage` (dict with `input_tokens`, `output_tokens`) | Token usage stats |
+| `model_info` | `models` (dict of model → usage breakdown) | Per-model usage (Claude only) |
 
 ## What's NOT Mapped (Invisible)
 
-These happen inside the agent subprocess but are not exposed:
-
-- **Agent thinking/reasoning** — internal chain-of-thought before tool selection
-- **Tool output/results** — what the tool returned to the agent (file contents, grep results, bash output)
-- **Retry loops** — if a tool fails and the agent retries
-- **Cost per tool call** — no per-call token breakdown
-- **Permission prompts** — when `--permission-mode auto` auto-approves a tool
-
-## Updating This Mapping
-
-When running live, if you see unexpected or missing events:
-
-1. Run with debug logging: set `trace_provider_payloads: true` in config
-2. Check the raw JSONL: `codex exec - --json 2>&1 | head -50`
-3. For Claude: `claude -p --output-format stream-json "test" 2>&1 | head -50`
-4. Update the event type names in:
-   - `relay_discussion/cli_providers.py` — `generate_stream()` for Claude, `generate()` for Codex
-   - This file
+- **Agent thinking/reasoning** — internal chain-of-thought
+- **Tool output/results** — what the tool returned (file contents, grep results)
+- **`system` init event** — Claude's tool list, model, permissions (could display)
+- **Codex `item.completed` with `aggregated_output`** — command output (could display)

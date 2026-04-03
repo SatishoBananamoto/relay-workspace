@@ -1095,28 +1095,15 @@ function handleToolEvent(data) {
   const evt = data.event;
   if (evt === 'tool_start') {
     currentToolName = data.tool || '?';
+    const inputPreview = data.input ? ' ' + data.input.slice(0, 80) : '';
     const line = document.createElement('div');
     line.className = 'tool-line';
-    line.innerHTML = '→ <span class="tool-name">' + escapeHtml(currentToolName) + '</span>';
+    line.innerHTML = '→ <span class="tool-name">' + escapeHtml(currentToolName) + '</span>' +
+      (inputPreview ? '<span class="tool-input"> ' + escapeHtml(inputPreview) + '</span>' : '');
     line.id = 'tool-current';
     toolActivity.appendChild(line);
     toolActivity.scrollTop = toolActivity.scrollHeight;
-    // Update thinking text
     thinkingText.textContent = (data.agent || '') + ' using ' + currentToolName;
-  } else if (evt === 'tool_input') {
-    const cur = document.getElementById('tool-current');
-    if (cur && data.partial) {
-      // Show first ~80 chars of input
-      let existing = cur.querySelector('.tool-input');
-      if (!existing) {
-        existing = document.createElement('span');
-        existing.className = 'tool-input';
-        cur.appendChild(document.createTextNode(' '));
-        cur.appendChild(existing);
-      }
-      const text = existing.textContent + data.partial;
-      existing.textContent = text.length > 100 ? text.slice(0, 100) + '...' : text;
-    }
   } else if (evt === 'tool_end') {
     const cur = document.getElementById('tool-current');
     if (cur) cur.removeAttribute('id');
