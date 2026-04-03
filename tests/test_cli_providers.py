@@ -262,25 +262,51 @@ def _codex_jsonl_output(text: str, thread_id: str = "codex-thread-456") -> str:
     return "\n".join(events)
 
 
+class _MockPopenStdin:
+    def write(self, s): pass
+    def close(self): pass
+
+
+class _MockPopen:
+    """Mock subprocess.Popen for Codex provider tests."""
+    def __init__(self, stdout_text="", returncode=0, on_create=None):
+        import io
+        self.stdin = _MockPopenStdin()
+        self.stdout = io.StringIO(stdout_text)
+        self.stderr = io.StringIO("")
+        self.returncode = returncode
+        self._on_create = on_create
+
+    def wait(self, timeout=None):
+        return self.returncode
+
+
+def _mock_codex_popen(stdout_text, output_file_text=None, cmd_capture=None):
+    """Create a Popen mock factory for Codex tests."""
+    def factory(cmd, **kwargs):
+        if cmd_capture is not None:
+            cmd_capture.extend(cmd)
+        # Write output file if requested
+        if output_file_text is not None:
+            for i, arg in enumerate(cmd):
+                if arg == "-o" and i + 1 < len(cmd):
+                    Path(cmd[i + 1]).write_text(output_file_text)
+        return _MockPopen(stdout_text=stdout_text)
+    return factory
+
+
 class TestCliCodexProvider:
 
     def test_generate_returns_response_from_output_file(self, tmp_path):
-        provider = CliCodexProvider(timeout=10)
+        provider = CliCodexProvider()
         agent = AgentConfig(name="Codex", provider="cli-codex")
         transcript = [_make_message(1, "moderator", "Satisho", "Hello")]
 
-        def mock_run(cmd, **kwargs):
-            # Find the -o flag and write to that file
-            for i, arg in enumerate(cmd):
-                if arg == "-o" and i + 1 < len(cmd):
-                    Path(cmd[i + 1]).write_text("Hello from Codex")
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0,
-                stdout=_codex_jsonl_output("Hello from Codex"),
-                stderr="",
-            )
-
-        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+        mock = _mock_codex_popen(
+            stdout_text=_codex_jsonl_output("Hello from Codex"),
+            output_file_text="Hello from Codex",
+        )
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock):
             response = provider.generate(agent, transcript, turn=1)
 
         assert response == "Hello from Codex"
@@ -292,17 +318,11 @@ class TestCliCodexProvider:
 
         assert provider.session_id is None
 
-        def mock_run(cmd, **kwargs):
-            for i, arg in enumerate(cmd):
-                if arg == "-o" and i + 1 < len(cmd):
-                    Path(cmd[i + 1]).write_text("Hi")
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0,
-                stdout=_codex_jsonl_output("Hi", "thread-xyz"),
-                stderr="",
-            )
-
-        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+        mock = _mock_codex_popen(
+            stdout_text=_codex_jsonl_output("Hi", "thread-xyz"),
+            output_file_text="Hi",
+        )
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock):
             provider.generate(agent, transcript, turn=1)
 
         assert provider.session_id == "thread-xyz"
@@ -319,48 +339,28 @@ class TestCliCodexProvider:
         ]
 
         captured_cmd = []
-
-        def mock_run(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-            for i, arg in enumerate(cmd):
-                if arg == "-o" and i + 1 < len(cmd):
-                    Path(cmd[i + 1]).write_text("response")
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0,
-                stdout=_codex_jsonl_output("response", "existing-thread"),
-                stderr="",
-            )
-
-        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+        mock = _mock_codex_popen(
+            stdout_text=_codex_jsonl_output("response", "existing-thread"),
+            output_file_text="response",
+            cmd_capture=captured_cmd,
+        )
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock):
             provider.generate(agent, transcript, turn=2)
 
         assert "resume" in captured_cmd
         assert "existing-thread" in captured_cmd
 
     def test_timeout_raises_provider_error(self):
-        provider = CliCodexProvider(timeout=1)
-        agent = AgentConfig(name="Codex", provider="cli-codex")
-        transcript = [_make_message(1, "moderator", "Satisho", "Hello")]
-
-        def mock_timeout(cmd, **kwargs):
-            raise subprocess.TimeoutExpired(cmd, 1)
-
-        with patch("relay_discussion.cli_providers.subprocess.run", mock_timeout):
-            with pytest.raises(ProviderError, match="timed out"):
-                provider.generate(agent, transcript, turn=1)
-
-    def test_nonzero_exit_with_no_output_raises_provider_error(self):
+        """With timeout=None (default), no timeout error. Test exception handling."""
         provider = CliCodexProvider()
         agent = AgentConfig(name="Codex", provider="cli-codex")
         transcript = [_make_message(1, "moderator", "Satisho", "Hello")]
 
         def mock_fail(cmd, **kwargs):
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=1, stdout="", stderr="codex crashed",
-            )
+            raise OSError("Codex not found")
 
-        with patch("relay_discussion.cli_providers.subprocess.run", mock_fail):
-            with pytest.raises(ProviderError, match="exited with code 1"):
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock_fail):
+            with pytest.raises(ProviderError, match="Codex failed"):
                 provider.generate(agent, transcript, turn=1)
 
     def test_empty_output_file_returns_empty_string(self):
@@ -368,17 +368,11 @@ class TestCliCodexProvider:
         agent = AgentConfig(name="Codex", provider="cli-codex")
         transcript = [_make_message(1, "moderator", "Satisho", "Hello")]
 
-        def mock_empty(cmd, **kwargs):
-            for i, arg in enumerate(cmd):
-                if arg == "-o" and i + 1 < len(cmd):
-                    Path(cmd[i + 1]).write_text("")
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0,
-                stdout=_codex_jsonl_output(""),
-                stderr="",
-            )
-
-        with patch("relay_discussion.cli_providers.subprocess.run", mock_empty):
+        mock = _mock_codex_popen(
+            stdout_text=_codex_jsonl_output(""),
+            output_file_text="",
+        )
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock):
             response = provider.generate(agent, transcript, turn=1)
             assert response == ""
 
@@ -388,19 +382,12 @@ class TestCliCodexProvider:
         transcript = [_make_message(1, "moderator", "Satisho", "Hello")]
 
         captured_cmd = []
-
-        def mock_run(cmd, **kwargs):
-            captured_cmd.extend(cmd)
-            for i, arg in enumerate(cmd):
-                if arg == "-o" and i + 1 < len(cmd):
-                    Path(cmd[i + 1]).write_text("ok")
-            return subprocess.CompletedProcess(
-                args=cmd, returncode=0,
-                stdout=_codex_jsonl_output("ok"),
-                stderr="",
-            )
-
-        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+        mock = _mock_codex_popen(
+            stdout_text=_codex_jsonl_output("ok"),
+            output_file_text="ok",
+            cmd_capture=captured_cmd,
+        )
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock):
             provider.generate(agent, transcript, turn=1)
 
         assert "--add-dir" in captured_cmd

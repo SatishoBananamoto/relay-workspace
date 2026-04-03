@@ -331,6 +331,14 @@ class CliCodexProvider(BaseProvider):
         self._timeout = seconds
 
     @property
+    def on_tool_event(self):
+        return getattr(self, "_on_tool_event", None)
+
+    @on_tool_event.setter
+    def on_tool_event(self, callback):
+        self._on_tool_event = callback
+
+    @property
     def session_id(self) -> str | None:
         return self._session_id
 
@@ -367,28 +375,52 @@ class CliCodexProvider(BaseProvider):
 
         cmd += ["--json", "-o", str(out_file)]
 
+        # Use Popen to stream JSONL events as they arrive
+        cb = self.on_tool_event
         try:
-            result = subprocess.run(
+            proc = subprocess.Popen(
                 cmd,
-                input=prompt if is_first_call or not self._session_id else prompt,
-                capture_output=True,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=self._timeout,
                 start_new_session=True,
             )
-        except subprocess.TimeoutExpired as exc:
-            out_file.unlink(missing_ok=True)
-            raise ProviderError(f"Codex timed out after {self._timeout}s") from exc
-
-        # Parse JSONL for thread_id
-        if result.stdout:
-            for line in result.stdout.strip().splitlines():
+            proc.stdin.write(prompt)
+            proc.stdin.close()
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
                 try:
                     event = json.loads(line)
                 except (json.JSONDecodeError, ValueError):
                     continue
-                if event.get("type") == "thread.started" and event.get("thread_id"):
+
+                etype = event.get("type", "")
+
+                if etype == "thread.started" and event.get("thread_id"):
                     self._session_id = event["thread_id"]
+
+                # Forward tool events if callback is set
+                if cb is not None:
+                    if etype == "function_call":
+                        cb({
+                            "event": "tool_start",
+                            "tool": event.get("name", "?"),
+                            "id": event.get("call_id", ""),
+                        })
+                    elif etype == "function_call_output":
+                        cb({"event": "tool_end"})
+                    elif etype in ("message.delta", "message.completed"):
+                        pass  # text output handled via output file
+
+            proc.wait(timeout=30)
+        except Exception as exc:
+            if 'proc' in locals():
+                proc.kill()
+            out_file.unlink(missing_ok=True)
+            raise ProviderError(f"Codex failed: {exc}") from exc
 
         # Read response from output file
         response = ""
@@ -398,8 +430,8 @@ class CliCodexProvider(BaseProvider):
         else:
             out_file.unlink(missing_ok=True)
 
-        if result.returncode != 0 and not response:
-            stderr = result.stderr.strip()[:200] if result.stderr else "no stderr"
+        if proc.returncode != 0 and not response:
+            stderr = proc.stderr.read().strip()[:200] if proc.stderr else "no stderr"
             raise ProviderError(f"Codex exited with code {result.returncode}: {stderr}")
 
         return response
