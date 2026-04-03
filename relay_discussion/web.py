@@ -28,6 +28,10 @@ from .moderator import ModeratorInputQueue, parse_input
 # EventBus — thread-safe fanout from engine callbacks to SSE clients
 # ---------------------------------------------------------------------------
 
+# Events worth replaying for late-connecting clients
+_REPLAY_TYPES = {"message", "status", "policy"}
+
+
 class EventBus:
     """Thread-safe fanout with history replay for late-connecting clients."""
 
@@ -54,7 +58,9 @@ class EventBus:
 
     def publish(self, event: dict) -> None:
         with self._lock:
-            self._history.append(event)
+            # Only store replayable events in history
+            if event.get("type") in _REPLAY_TYPES:
+                self._history.append(event)
             dead = []
             for q in self._subscribers:
                 try:
@@ -1391,6 +1397,8 @@ function handleActivity(data) {
     }
   } else if (kind === 'tool_event') {
     handleToolEvent(data);
+  } else if (kind === 'warning') {
+    showToast('WARNING: ' + (data.message || 'unknown'));
   } else if (kind === 'agent_failed') {
     hideThinking();
     showToast(data.agent + ' failed: ' + (data.failure_reason || data.failure_type || 'unknown'));

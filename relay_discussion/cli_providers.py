@@ -136,17 +136,23 @@ class CliClaudeProvider(BaseProvider):
         flags: list[str] = []
         if self._workspace_path:
             flags += ["--add-dir", str(self._workspace_path)]
-        if self._permission_mode == "dangerously-skip-permissions":
-            flags.append("--dangerously-skip-permissions")
-        else:
-            effective = self.get_effective_tools()
-            if effective:
-                flags += ["--permission-mode", self._permission_mode]
-                flags += ["--allowedTools", " ".join(effective)]
+            if self._permission_mode == "dangerously-skip-permissions":
+                flags.append("--dangerously-skip-permissions")
             else:
-                # No tools allowed — deny everything via empty allowedTools
+                effective = self.get_effective_tools()
                 flags += ["--permission-mode", self._permission_mode]
-                flags += ["--allowedTools", ""]
+                flags += ["--allowedTools", " ".join(effective) if effective else ""]
+        else:
+            # No workspace = discuss mode. No tools unless explicitly overridden.
+            if self._permission_mode == "dangerously-skip-permissions":
+                flags.append("--dangerously-skip-permissions")
+            elif self._denied_tools != set(_DEFAULT_TOOLS):
+                # Tools were explicitly modified — respect the override
+                effective = self.get_effective_tools()
+                if effective:
+                    flags += ["--permission-mode", self._permission_mode]
+                    flags += ["--allowedTools", " ".join(effective)]
+            # else: no flags = no tools in discuss mode
         return flags
 
     @property

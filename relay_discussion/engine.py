@@ -58,6 +58,8 @@ class RelayRunner:
         self._force_next: str | None = None
         self._pending_approval: dict | None = None
         self._pending_efforts: dict[str, str] = {}  # {side: effort} for provider creation
+        self._tool_call_count: int = 0  # tracks internal tool calls per turn
+        self._max_tool_calls: int = 50  # warning threshold per turn
         self._fault_scripts = {
             id(config.left_agent): list(config.left_agent.fault_script),
             id(config.right_agent): list(config.right_agent.fault_script),
@@ -81,6 +83,14 @@ class RelayRunner:
             if hasattr(provider, "on_tool_event") and self._on_activity:
                 def _make_tool_cb(agent_name):
                     def cb(evt):
+                        if evt.get("event") == "tool_start":
+                            self._tool_call_count += 1
+                            if self._tool_call_count == self._max_tool_calls:
+                                self._emit_activity({
+                                    "kind": "warning",
+                                    "message": f"{agent_name} has made {self._tool_call_count} tool calls this turn",
+                                    "agent": agent_name,
+                                })
                         self._emit_activity({
                             "kind": "tool_event",
                             "agent": agent_name,
@@ -115,6 +125,7 @@ class RelayRunner:
             self._validate_resume_session(messages)
             self._restore_fault_state(messages)
             self._restore_policy_state(messages)
+            self._restore_pending_approval(messages)
             sequence = messages[-1].seq + 1
             start_turn = self._load_resume_turn(messages)
             if start_turn > self.config.turns:
@@ -199,6 +210,7 @@ class RelayRunner:
             if self._observer:
                 self._observer.on_turn_start(turn, agent.name)
 
+            self._tool_call_count = 0  # reset per turn
             self._emit_activity({
                 "kind": "thinking",
                 "agent": agent.name,
@@ -309,7 +321,8 @@ class RelayRunner:
                     pause_message = self._build_pause_message(
                         sequence=sequence,
                         reason=pause_reason,
-                        next_turn=turn,  # same turn — resume will re-check after approval
+                        next_turn=turn,
+                        pending_approval=self._pending_approval,
                         messages=messages,
                     )
                     self._commit(messages, pause_message)
@@ -829,22 +842,28 @@ class RelayRunner:
                 return "Paused relay: committed agent message matched the operator-language tripwire."
         return None
 
-    def _build_pause_message(self, sequence: int, reason: str, next_turn: int, messages: list[Message]) -> Message:
+    def _build_pause_message(
+        self, sequence: int, reason: str, next_turn: int, messages: list[Message],
+        pending_approval: dict | None = None,
+    ) -> Message:
+        metadata = {
+            "kind": "pause",
+            "status": "paused",
+            "reason": reason,
+            "next_turn": next_turn,
+            "fault_state": self._fault_state_snapshot(),
+            "policy_state": self._policy.export_state(),
+            "resume_state_digest": self._resume_state_digest(),
+            "conversation_digest": self._conversation_digest(messages),
+        }
+        if pending_approval:
+            metadata["pending_approval"] = pending_approval
         return self._build_message(
             seq=sequence,
             role="system",
             author="relay",
             content=reason,
-            metadata={
-                "kind": "pause",
-                "status": "paused",
-                "reason": reason,
-                "next_turn": next_turn,
-                "fault_state": self._fault_state_snapshot(),
-                "policy_state": self._policy.export_state(),
-                "resume_state_digest": self._resume_state_digest(),
-                "conversation_digest": self._conversation_digest(messages),
-            },
+            metadata=metadata,
         )
 
     def _session_snapshot(self) -> dict[str, object]:
@@ -906,6 +925,14 @@ class RelayRunner:
         if not is_valid_policy_state_snapshot(stored_policy_state):
             raise ValueError("Paused transcript is missing valid policy_state metadata")
         self._policy.restore_state(stored_policy_state)
+
+    def _restore_pending_approval(self, messages: list[Message]) -> None:
+        last = messages[-1]
+        if last.role != "system" or last.metadata.get("kind") != "pause":
+            return
+        pending = last.metadata.get("pending_approval")
+        if pending and isinstance(pending, dict):
+            self._pending_approval = pending
 
     @staticmethod
     def _conversation_digest(messages: list[Message]) -> str:

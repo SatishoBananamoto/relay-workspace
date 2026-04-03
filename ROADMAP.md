@@ -22,11 +22,11 @@ Core engine, web viewer, and controls work. 295 tests passing. Ready for real se
 | # | Issue | Detail | Fix effort |
 |---|-------|--------|------------|
 | K5 | Pending approval lost on crash | `_pending_approval` is in-memory. Process dies → pending turn gone. Resume starts fresh turn. | Store in pause message metadata |
-| K6 | No concurrent moderator safety | Multiple tabs/users share one queue. Conflicting commands execute in queue order, no conflict resolution. | Add command source tracking, or accept single-moderator design |
+| K6 | No concurrent moderator safety | Multiple tabs/users share one queue. Conflicting commands execute in queue order. | **Accepted: single-moderator by design.** Multiple tabs view, one person controls. |
 | K7 | SSE history grows unbounded | Every event appended to history list for late-connecting clients. 500+ turn session = large replay. | Add max history size, or paginate |
 | K8 | No discuss-mode tool restriction | `--permission-mode auto` with `--allowedTools` when no workspace. Agents CAN use tools in pure discuss mode. | Issue #7 from original bug list. Add `--disallowedTools` or no-tools mode. |
 | K9 | No internal turn cap | Claude/Codex can run unlimited internal tool loops per turn. No `--max-turns` or budget limit. | Issue #13. Add `--max-turns` flag or monitor via tool events. |
-| K10 | Web viewer HTML is one big string | All CSS/JS/HTML inline in `web.py`. Hard to maintain or customize. | Extract to separate files, serve from disk. Low priority. |
+| K10 | Web viewer HTML is one big string | All CSS/JS/HTML inline in `web.py`. Hard to maintain or customize. | **Accepted for now.** Single file = zero build step. Extract later if needed. |
 
 ---
 

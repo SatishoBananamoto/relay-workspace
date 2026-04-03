@@ -38,9 +38,9 @@ class TestEventBus:
 
     def test_history_replay(self):
         bus = EventBus()
-        bus.publish({"type": "a", "data": 1})
-        bus.publish({"type": "b", "data": 2})
-        # Late subscriber gets history
+        bus.publish({"type": "message", "data": 1})
+        bus.publish({"type": "message", "data": 2})
+        # Late subscriber gets history (only replayable types)
         q = bus.subscribe()
         assert q.get(timeout=1)["data"] == 1
         assert q.get(timeout=1)["data"] == 2
@@ -60,9 +60,19 @@ class TestEventBus:
     def test_history_count(self):
         bus = EventBus()
         assert bus.history_count == 0
-        bus.publish({"type": "a"})
-        bus.publish({"type": "b"})
+        bus.publish({"type": "message"})
+        bus.publish({"type": "status"})
         assert bus.history_count == 2
+
+    def test_transient_events_not_in_history(self):
+        bus = EventBus()
+        bus.publish({"type": "stream", "data": {"chunk": "hi"}})
+        bus.publish({"type": "activity", "data": {}})
+        assert bus.history_count == 0
+        # But subscribers still receive them live
+        q = bus.subscribe()
+        bus.publish({"type": "stream", "data": {"chunk": "x"}})
+        assert q.get(timeout=1)["type"] == "stream"
 
     def test_subscriber_count(self):
         bus = EventBus()
