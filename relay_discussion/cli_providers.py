@@ -85,7 +85,7 @@ class CliClaudeProvider(BaseProvider):
         model: str = "opus",
         effort: str = "max",
         workspace_path: Path | str | None = None,
-        timeout: int = 600,
+        timeout: int | None = None,
     ) -> None:
         self._model = model
         self._effort = effort
@@ -111,11 +111,19 @@ class CliClaudeProvider(BaseProvider):
     def set_permission_mode(self, mode: str) -> None:
         self._permission_mode = mode
 
-    def set_timeout(self, seconds: int) -> None:
+    def set_timeout(self, seconds: int | None) -> None:
         self._timeout = seconds
 
     def get_effective_tools(self) -> list[str]:
         return [t for t in self._allowed_tools if t not in self._denied_tools]
+
+    @property
+    def on_tool_event(self):
+        return getattr(self, "_on_tool_event", None)
+
+    @on_tool_event.setter
+    def on_tool_event(self, callback):
+        self._on_tool_event = callback
 
     def _permission_flags(self) -> list[str]:
         """Build CLI flags for permissions. Called each turn."""
@@ -253,12 +261,14 @@ class CliClaudeProvider(BaseProvider):
                 except (json.JSONDecodeError, ValueError):
                     continue
 
+                etype = event.get("type", "")
+
                 # Extract session_id from result event
-                if event.get("type") == "result":
+                if etype == "result":
                     self._session_id = event.get("session_id") or self._session_id
 
                 # Stream content deltas
-                if event.get("type") == "content_block_delta":
+                if etype == "content_block_delta":
                     delta = event.get("delta", {})
                     text = delta.get("text", "")
                     if text:
@@ -266,10 +276,36 @@ class CliClaudeProvider(BaseProvider):
                         yield text
 
                 # Also handle result text (final)
-                if event.get("type") == "result" and not full_text:
+                if etype == "result" and not full_text:
                     result_text = event.get("result", "")
                     if result_text:
                         yield result_text
+
+                # Forward tool events to callback
+                cb = self.on_tool_event
+                if cb is not None:
+                    if etype == "content_block_start":
+                        ctype = event.get("content_block", {}).get("type", "")
+                        if ctype == "tool_use":
+                            cb({
+                                "event": "tool_start",
+                                "tool": event["content_block"].get("name", "?"),
+                                "id": event["content_block"].get("id", ""),
+                            })
+                    elif etype == "content_block_delta":
+                        delta = event.get("delta", {})
+                        if delta.get("type") == "input_json_delta":
+                            cb({
+                                "event": "tool_input",
+                                "partial": delta.get("partial_json", ""),
+                            })
+                    elif etype == "content_block_stop":
+                        cb({"event": "tool_end"})
+                    elif etype == "result":
+                        # Include cost/usage info if present
+                        usage = event.get("usage") or event.get("total_usage")
+                        if usage:
+                            cb({"event": "usage", "usage": usage})
         finally:
             proc.wait(timeout=10)
 
@@ -281,7 +317,7 @@ class CliCodexProvider(BaseProvider):
         self,
         *,
         workspace_path: Path | str | None = None,
-        timeout: int = 600,
+        timeout: int | None = None,
     ) -> None:
         self._workspace_path = Path(workspace_path) if workspace_path else None
         self._timeout = timeout
@@ -291,7 +327,7 @@ class CliCodexProvider(BaseProvider):
             self._workspace_mgr = WorkspaceManager(self._workspace_path)
         self._session_id: str | None = None
 
-    def set_timeout(self, seconds: int) -> None:
+    def set_timeout(self, seconds: int | None) -> None:
         self._timeout = seconds
 
     @property

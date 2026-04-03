@@ -70,7 +70,19 @@ class RelayRunner:
             kwargs: dict[str, object] = {}
             if agent.provider in ("cli-claude", "cli-codex") and self._workspace_path:
                 kwargs["workspace_path"] = self._workspace_path
-            self._providers[side] = get_provider(agent.provider, **kwargs)
+            provider = get_provider(agent.provider, **kwargs)
+            # Wire tool event callback if provider supports it
+            if hasattr(provider, "on_tool_event") and self._on_activity:
+                def _make_tool_cb(agent_name):
+                    def cb(evt):
+                        self._emit_activity({
+                            "kind": "tool_event",
+                            "agent": agent_name,
+                            **evt,
+                        })
+                    return cb
+                provider.on_tool_event = _make_tool_cb(agent.name)
+            self._providers[side] = provider
         return self._providers[side]
 
     def set_observer(self, observer: object) -> None:

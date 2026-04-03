@@ -588,7 +588,7 @@ _INDEX_HTML = """<!DOCTYPE html>
   }
   #msg-input input:focus { border-color: #58a6ff; }
 
-  /* Thinking indicator */
+  /* Thinking / tool activity bar */
   #thinking-bar {
     display: none;
     padding: 8px 16px;
@@ -597,8 +597,11 @@ _INDEX_HTML = """<!DOCTYPE html>
     font-size: 12px;
     color: #8b949e;
     flex-shrink: 0;
+    flex-direction: column;
+    gap: 4px;
   }
-  #thinking-bar.active { display: flex; align-items: center; gap: 8px; }
+  #thinking-bar.active { display: flex; }
+  .thinking-row { display: flex; align-items: center; gap: 8px; }
   .thinking-dot {
     width: 6px; height: 6px;
     background: #58a6ff;
@@ -610,6 +613,18 @@ _INDEX_HTML = """<!DOCTYPE html>
   @keyframes pulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 1; } }
   #thinking-text { color: #c9d1d9; }
   #thinking-elapsed { color: #484f58; margin-left: auto; }
+  #tool-activity {
+    font-size: 11px;
+    color: #8b949e;
+    max-height: 60px;
+    overflow-y: auto;
+  }
+  .tool-line {
+    padding: 1px 0;
+    color: #58a6ff;
+  }
+  .tool-line .tool-name { color: #bc8cff; font-weight: 600; }
+  .tool-line .tool-input { color: #484f58; }
 
   /* Tabs */
   .tab-btn {
@@ -708,11 +723,14 @@ _INDEX_HTML = """<!DOCTYPE html>
 <div id="toast-container"></div>
 
 <div id="thinking-bar">
-  <span class="thinking-dot"></span>
-  <span class="thinking-dot"></span>
-  <span class="thinking-dot"></span>
-  <span id="thinking-text">---</span>
-  <span id="thinking-elapsed"></span>
+  <div class="thinking-row">
+    <span class="thinking-dot"></span>
+    <span class="thinking-dot"></span>
+    <span class="thinking-dot"></span>
+    <span id="thinking-text">---</span>
+    <span id="thinking-elapsed"></span>
+  </div>
+  <div id="tool-activity"></div>
 </div>
 
 <div id="main">
@@ -894,16 +912,20 @@ function appendHarnessEvent(data) {
   harnessFeed.appendChild(div);
 }
 
-// --- Thinking indicator ---
+// --- Thinking indicator + tool activity ---
 const thinkingBar = document.getElementById('thinking-bar');
 const thinkingText = document.getElementById('thinking-text');
 const thinkingElapsed = document.getElementById('thinking-elapsed');
+const toolActivity = document.getElementById('tool-activity');
 let thinkingTimer = null;
 let thinkingStart = 0;
+let currentToolName = '';
 
 function showThinking(agent, turn, provider) {
   thinkingBar.className = 'active';
   thinkingText.textContent = agent + ' is thinking... (T' + turn + ', ' + provider + ')';
+  toolActivity.innerHTML = '';
+  currentToolName = '';
   thinkingStart = Date.now();
   if (thinkingTimer) clearInterval(thinkingTimer);
   thinkingTimer = setInterval(() => {
@@ -915,7 +937,52 @@ function showThinking(agent, turn, provider) {
 
 function hideThinking() {
   thinkingBar.className = '';
+  toolActivity.innerHTML = '';
+  currentToolName = '';
   if (thinkingTimer) { clearInterval(thinkingTimer); thinkingTimer = null; }
+}
+
+function handleToolEvent(data) {
+  if (!thinkingBar.classList.contains('active')) {
+    thinkingBar.className = 'active';
+  }
+  const evt = data.event;
+  if (evt === 'tool_start') {
+    currentToolName = data.tool || '?';
+    const line = document.createElement('div');
+    line.className = 'tool-line';
+    line.innerHTML = '→ <span class="tool-name">' + escapeHtml(currentToolName) + '</span>';
+    line.id = 'tool-current';
+    toolActivity.appendChild(line);
+    toolActivity.scrollTop = toolActivity.scrollHeight;
+    // Update thinking text
+    thinkingText.textContent = (data.agent || '') + ' using ' + currentToolName;
+  } else if (evt === 'tool_input') {
+    const cur = document.getElementById('tool-current');
+    if (cur && data.partial) {
+      // Show first ~80 chars of input
+      let existing = cur.querySelector('.tool-input');
+      if (!existing) {
+        existing = document.createElement('span');
+        existing.className = 'tool-input';
+        cur.appendChild(document.createTextNode(' '));
+        cur.appendChild(existing);
+      }
+      const text = existing.textContent + data.partial;
+      existing.textContent = text.length > 100 ? text.slice(0, 100) + '...' : text;
+    }
+  } else if (evt === 'tool_end') {
+    const cur = document.getElementById('tool-current');
+    if (cur) cur.removeAttribute('id');
+    currentToolName = '';
+  } else if (evt === 'usage') {
+    const line = document.createElement('div');
+    line.className = 'tool-line';
+    line.style.color = '#8b949e';
+    const u = data.usage || {};
+    line.textContent = 'usage: ' + (u.input_tokens || '?') + ' in / ' + (u.output_tokens || '?') + ' out';
+    toolActivity.appendChild(line);
+  }
 }
 
 function updateStatus(data) {
@@ -1187,6 +1254,8 @@ function handleActivity(data) {
     if (data.data && data.data.obligations) {
       updateObligations(data.data.obligations);
     }
+  } else if (kind === 'tool_event') {
+    handleToolEvent(data);
   }
 }
 
