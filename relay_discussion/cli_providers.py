@@ -246,6 +246,7 @@ class CliClaudeProvider(BaseProvider):
             "--model", self._model,
             "--effort", self._effort,
             "--output-format", "stream-json",
+            "--verbose",
         ]
         if self._session_id:
             cmd += ["--resume", self._session_id]
