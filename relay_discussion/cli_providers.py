@@ -99,6 +99,7 @@ class CliClaudeProvider(BaseProvider):
         self._allowed_tools: list[str] = list(_DEFAULT_TOOLS)
         self._denied_tools: set[str] = set()
         self._permission_mode: str = "auto"
+        self.last_actual_model: str | None = None  # captured from response
 
     def set_model(self, model: str) -> None:
         self._model = model
@@ -216,6 +217,10 @@ class CliClaudeProvider(BaseProvider):
             raise ProviderError(f"Claude returned error: {data.get('result', 'unknown')}")
 
         self._session_id = data.get("session_id") or self._session_id
+        # Capture actual model used from response
+        model_usage = data.get("modelUsage", {})
+        if model_usage:
+            self.last_actual_model = next(iter(model_usage.keys()), None)
         response = data.get("result", "")
         if not response or not response.strip():
             # Surface what Claude actually returned for debugging
@@ -332,6 +337,7 @@ class CliClaudeProvider(BaseProvider):
                             cb({"event": "usage", "usage": usage})
                         model_usage = event.get("modelUsage", {})
                         if model_usage:
+                            self.last_actual_model = next(iter(model_usage.keys()), None)
                             cb({"event": "model_info", "models": model_usage})
         finally:
             proc.wait(timeout=10)

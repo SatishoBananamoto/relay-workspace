@@ -260,12 +260,19 @@ class RelayRunner:
                 turn += 1
                 continue
 
+            _provider = self._providers.get("left" if agent is self.config.left_agent else "right")
+            actual_model = getattr(_provider, "last_actual_model", None) if _provider else None
             agent_message = self._build_message(
                 seq=sequence,
                 role="agent",
                 author=agent.name,
                 content=response,
-                metadata={"provider": agent.provider, "model": agent.model, "turn": turn},
+                metadata={
+                    "provider": agent.provider,
+                    "model": actual_model or agent.model,
+                    "model_requested": agent.model,
+                    "turn": turn,
+                },
             )
             policy_result = self._policy.evaluate_turn(agent.name, response, messages)
             action_type = classify_relay_action(agent_message, messages)
