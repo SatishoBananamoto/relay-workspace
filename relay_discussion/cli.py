@@ -441,6 +441,16 @@ def _build_new_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _apply_config_overrides(config: RelayConfig, overrides: dict) -> None:
+    """Apply lobby settings to the relay config before engine starts."""
+    if "turns" in overrides:
+        config.turns = int(overrides["turns"])
+    if "left_instruction" in overrides:
+        config.left_agent.instruction = overrides["left_instruction"]
+    if "right_instruction" in overrides:
+        config.right_agent.instruction = overrides["right_instruction"]
+
+
 def _cmd_new(argv: list[str]) -> int:
     from .config import load_config
     from .session import SessionManager
@@ -510,7 +520,9 @@ def _cmd_new(argv: list[str]) -> int:
 
         mq = ModeratorInputQueue()
 
-        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None):
+        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None, config_overrides=None):
+            if config_overrides:
+                _apply_config_overrides(config, config_overrides)
             return RelayRunner(
                 config=config,
                 out_path=transcript_path,
@@ -542,7 +554,9 @@ def _cmd_new(argv: list[str]) -> int:
 
         mq = ModeratorInputQueue()
 
-        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None):
+        def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None, config_overrides=None):
+            if config_overrides:
+                _apply_config_overrides(config, config_overrides)
             return RelayRunner(
                 config=config,
                 out_path=transcript_path,

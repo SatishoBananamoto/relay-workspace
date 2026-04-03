@@ -104,6 +104,8 @@ class WebViewer:
         self._current_agent = "---"
         self._streaming = False
         self._server: ThreadingHTTPServer | None = None
+        self._start_event = threading.Event()
+        self._config_overrides: dict = {}  # settings changed in lobby
 
     @property
     def bus(self) -> EventBus:
@@ -196,6 +198,18 @@ class WebViewer:
             "agent": self._current_agent,
         }
 
+    def wait_for_start(self) -> dict:
+        """Block until the moderator clicks Start or auto-start fires."""
+        self._start_event.wait()
+        return self._config_overrides
+
+    def trigger_start(self, overrides: dict | None = None) -> None:
+        """Called from POST /start — unblocks the engine thread."""
+        if overrides:
+            self._config_overrides = overrides
+        self._start_event.set()
+        self._bus.publish({"type": "status", "data": {"status": "starting"}})
+
     def run(self) -> None:
         """Start HTTP server (blocks until exit)."""
         viewer = self
@@ -214,6 +228,8 @@ class WebViewer:
             def do_POST(self):
                 if self.path == "/control":
                     self._handle_control()
+                elif self.path == "/start":
+                    self._handle_start()
                 else:
                     self.send_error(404)
 
@@ -268,6 +284,20 @@ class WebViewer:
                     pass
                 finally:
                     viewer._bus.unsubscribe(q)
+
+            def _handle_start(self):
+                try:
+                    length = int(self.headers.get("Content-Length", 0))
+                    body = json.loads(self.rfile.read(length)) if length else {}
+                except (json.JSONDecodeError, ValueError):
+                    body = {}
+                viewer.trigger_start(body)
+                resp = json.dumps({"ok": True}).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(resp)))
+                self.end_headers()
+                self.wfile.write(resp)
 
             def _handle_control(self):
                 try:
@@ -334,11 +364,20 @@ def run_relay_with_web(
 
     def engine_thread():
         try:
+            # Wait for Start from web UI (or auto-start after 10s)
+            if not resume:
+                viewer.update_status("lobby")
+                overrides = viewer.wait_for_start()
+            else:
+                overrides = {}
+
+            viewer.update_status("starting")
             runner = runner_factory(
                 moderator_queue=moderator_queue,
                 on_commit=viewer.on_commit,
                 on_stream_chunk=viewer.on_stream_chunk,
                 on_activity=viewer.on_activity,
+                config_overrides=overrides,
             )
             result = runner.run(resume=resume)
             result_holder.append(result)
@@ -406,6 +445,7 @@ _INDEX_HTML = """<!DOCTYPE html>
   .status-paused { background: #d2992233; color: #d29922; }
   .status-done { background: #23863633; color: #3fb950; }
   .status-starting { background: #30363d; color: #8b949e; }
+  .status-lobby { background: #1f6feb33; color: #58a6ff; }
 
   /* Main layout */
   #main {
@@ -724,6 +764,42 @@ _INDEX_HTML = """<!DOCTYPE html>
   <span id="s-agent">---</span>
 </div>
 
+<!-- Lobby overlay -->
+<div id="lobby" style="position:fixed;inset:0;background:#0d1117ee;z-index:200;display:flex;align-items:center;justify-content:center">
+  <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;width:480px;max-width:90vw">
+    <h2 style="color:#c9d1d9;font-size:16px;margin-bottom:16px">Session Settings</h2>
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Topic</label>
+      <div id="lobby-topic" style="font-size:13px;color:#c9d1d9;padding:8px;background:#0d1117;border-radius:4px;border:1px solid #30363d;max-height:60px;overflow:auto"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+      <div>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Turns</label>
+        <input type="number" id="lobby-turns" value="4" min="1" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:13px;font-family:inherit">
+      </div>
+      <div>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Auto-start in</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span id="lobby-countdown" style="font-size:24px;color:#58a6ff;font-weight:600">10</span>
+          <span style="font-size:12px;color:#8b949e">seconds</span>
+        </div>
+      </div>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Left agent instruction</label>
+      <input type="text" id="lobby-left-instr" placeholder="(optional)" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+    </div>
+    <div style="margin-bottom:16px">
+      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Right agent instruction</label>
+      <input type="text" id="lobby-right-instr" placeholder="(optional)" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+    </div>
+    <div style="display:flex;gap:8px">
+      <button onclick="lobbyStart()" style="flex:1;padding:10px;background:#1f6feb;border:none;border-radius:4px;color:#fff;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer">Start Now</button>
+      <button onclick="lobbyCancelAuto()" style="padding:10px 16px;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit;cursor:pointer">Cancel Auto</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast-container"></div>
 
 <div id="thinking-bar">
@@ -763,7 +839,7 @@ _INDEX_HTML = """<!DOCTYPE html>
       <h3>Steering</h3>
       <div class="btn-row" id="steering-btns"></div>
       <div style="display:flex;gap:6px;margin-bottom:8px">
-        <input type="number" id="timeout-input" value="600" min="30" max="3600" style="width:70px;padding:4px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+        <input type="number" id="timeout-input" placeholder="none" min="0" max="3600" style="width:70px;padding:4px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
         <button class="btn" onclick="setTimeoutVal()">Set Timeout</button>
       </div>
 
@@ -1283,11 +1359,69 @@ function handleActivity(data) {
   }
 }
 
-// Initialize with agent names from state
+// Initialize
 fetch('/state').then(r => r.json()).then(data => {
   document.getElementById('s-session').textContent = data.session_id || '---';
   updateStatus(data);
-  // We don't know agent names from state alone — they'll come from messages
+  // Populate lobby
+  document.getElementById('lobby-topic').textContent = data.topic || '';
+  // Show lobby only if status is 'lobby' (not resume)
+  if (data.status !== 'lobby') {
+    document.getElementById('lobby').style.display = 'none';
+  }
+});
+
+// --- Lobby ---
+let lobbyTimer = null;
+let lobbyCountdown = 10;
+
+function startLobbyCountdown() {
+  lobbyCountdown = 10;
+  document.getElementById('lobby-countdown').textContent = lobbyCountdown;
+  lobbyTimer = setInterval(() => {
+    lobbyCountdown--;
+    document.getElementById('lobby-countdown').textContent = lobbyCountdown;
+    if (lobbyCountdown <= 0) {
+      clearInterval(lobbyTimer);
+      lobbyStart();
+    }
+  }, 1000);
+}
+
+function lobbyCancelAuto() {
+  if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
+  document.getElementById('lobby-countdown').textContent = '--';
+}
+
+async function lobbyStart() {
+  if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
+  document.getElementById('lobby').style.display = 'none';
+  const overrides = {};
+  const turns = document.getElementById('lobby-turns').value;
+  if (turns) overrides.turns = parseInt(turns);
+  const leftInstr = document.getElementById('lobby-left-instr').value.trim();
+  if (leftInstr) overrides.left_instruction = leftInstr;
+  const rightInstr = document.getElementById('lobby-right-instr').value.trim();
+  if (rightInstr) overrides.right_instruction = rightInstr;
+  await fetch('/start', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(overrides),
+  });
+}
+
+// Start countdown when lobby is visible
+if (document.getElementById('lobby').style.display !== 'none') {
+  startLobbyCountdown();
+}
+
+// Hide lobby when status changes from lobby
+evtSource.addEventListener('status', (e) => {
+  const data = JSON.parse(e.data);
+  if (data.status !== 'lobby') {
+    document.getElementById('lobby').style.display = 'none';
+    if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
+  }
 });
 
 // Track agents from messages AND activity events
