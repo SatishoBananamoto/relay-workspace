@@ -54,6 +54,9 @@ class RelayRunner:
                 right_name=self.config.right_agent.name,
             )
         self._providers: dict[str, BaseProvider] = {}
+        self._skip_agents: set[str] = set()
+        self._force_next: str | None = None
+        self._pending_approval: dict | None = None
         self._fault_scripts = {
             id(config.left_agent): list(config.left_agent.fault_script),
             id(config.right_agent): list(config.right_agent.fault_script),
@@ -147,7 +150,22 @@ class RelayRunner:
                         self._commit(messages, pause_message)
                         return RelayRunResult(messages=messages, status="paused", pause_reason=reason)
 
-            agent = agents[(turn - 1) % len(agents)]
+            # Agent selection: force_next overrides, skip skips
+            if self._force_next:
+                try:
+                    agent = self._resolve_agent(self._force_next)
+                except ValueError:
+                    agent = agents[(turn - 1) % len(agents)]
+                self._force_next = None
+            else:
+                agent = agents[(turn - 1) % len(agents)]
+
+            if agent.name in self._skip_agents:
+                self._skip_agents.discard(agent.name)
+                self._emit_activity({"kind": "turn_skipped", "agent": agent.name, "turn": turn})
+                turn += 1
+                continue
+
             request_trace = self._provider_request_trace(agent=agent, transcript=messages, turn=turn)
             if request_trace:
                 trace_message = self._build_message(
@@ -245,14 +263,28 @@ class RelayRunner:
                         failure_type=f"policy_{policy_result.decision.value}",
                     )
                 if policy_result.decision == PolicyDecision.CLARIFY:
+                    # Store the pending turn for approval workflow
+                    self._pending_approval = {
+                        "agent_name": agent.name,
+                        "turn": turn,
+                        "response": response,
+                        "action_type": action_type,
+                    }
+                    self._emit_activity({
+                        "kind": "approval_needed",
+                        "agent": agent.name,
+                        "turn": turn,
+                        "action_type": action_type,
+                        "response_preview": response[:200],
+                    })
                     pause_reason = (
                         f"Paused relay: policy requires clarification before committing "
-                        f"{agent.name}'s turn."
+                        f"{agent.name}'s turn. Use 'approve' or 'reject' to continue."
                     )
                     pause_message = self._build_pause_message(
                         sequence=sequence,
                         reason=pause_reason,
-                        next_turn=turn + 1,
+                        next_turn=turn,  # same turn — resume will re-check after approval
                         messages=messages,
                     )
                     self._commit(messages, pause_message)
@@ -319,6 +351,215 @@ class RelayRunner:
             turn += 1
 
         return RelayRunResult(messages=messages, status="completed")
+
+    # ------------------------------------------------------------------
+    # Command dispatch
+    # ------------------------------------------------------------------
+
+    def _resolve_agent(self, name: str) -> "AgentConfig":
+        """Resolve an agent name to its AgentConfig."""
+        if name == self.config.left_agent.name:
+            return self.config.left_agent
+        if name == self.config.right_agent.name:
+            return self.config.right_agent
+        raise ValueError(f"Unknown agent: {name}")
+
+    def _resolve_side(self, name: str) -> str:
+        if name == self.config.left_agent.name:
+            return "left"
+        if name == self.config.right_agent.name:
+            return "right"
+        raise ValueError(f"Unknown agent: {name}")
+
+    def _handle_control_command(
+        self,
+        entry: "ControlCommand",
+        messages: list["Message"],
+        sequence: int,
+        turn: int,
+    ) -> tuple[str, str, int] | None:
+        """Dispatch a control command. Returns interrupt tuple or None."""
+        cmd = entry.command
+        params = entry.params
+
+        # --- Session control (legacy) ---
+        if cmd == "stop":
+            return ("stopped", "Stopped by moderator.", 0)
+        if cmd == "pause":
+            return ("paused", "Paused by moderator.", 0)
+        if cmd == "more" and entry.value:
+            self.config.turns += entry.value
+            return ("extended", f"Extended by {entry.value} turns.", 0)
+        if cmd == "nolimit":
+            self.config.turns = 999_999
+            return ("extended", "Turn limit removed.", 0)
+
+        # --- Permission control ---
+        if cmd in ("deny_tool", "allow_tool"):
+            agent_name = params.get("agent", "")
+            tool = params.get("tool", "")
+            try:
+                side = self._resolve_side(agent_name)
+                provider = self._providers.get(side)
+                if provider and hasattr(provider, "deny_tool"):
+                    if cmd == "deny_tool":
+                        provider.deny_tool(tool)
+                    else:
+                        provider.allow_tool(tool)
+            except ValueError:
+                pass
+
+        if cmd == "set_permission_mode":
+            agent_name = params.get("agent", "")
+            mode = params.get("mode", "auto")
+            try:
+                side = self._resolve_side(agent_name)
+                provider = self._providers.get(side)
+                if provider and hasattr(provider, "set_permission_mode"):
+                    provider.set_permission_mode(mode)
+            except ValueError:
+                pass
+
+        # --- Steering ---
+        if cmd == "skip":
+            agent_name = params.get("agent", "")
+            self._skip_agents.add(agent_name)
+
+        if cmd == "force_next":
+            self._force_next = params.get("agent")
+
+        if cmd == "set_instruction":
+            agent_name = params.get("agent", "")
+            instruction = params.get("instruction", "")
+            try:
+                agent = self._resolve_agent(agent_name)
+                agent.instruction = instruction
+            except ValueError:
+                pass
+
+        if cmd == "set_timeout":
+            seconds = params.get("seconds", 600)
+            agent_name = params.get("agent")
+            if agent_name:
+                try:
+                    side = self._resolve_side(agent_name)
+                    provider = self._providers.get(side)
+                    if provider and hasattr(provider, "set_timeout"):
+                        provider.set_timeout(seconds)
+                except ValueError:
+                    pass
+            else:
+                # Set for all providers
+                for provider in self._providers.values():
+                    if hasattr(provider, "set_timeout"):
+                        provider.set_timeout(seconds)
+
+        # --- Session settings ---
+        if cmd == "set_retry":
+            self.config.retry_attempts = params.get("attempts", self.config.retry_attempts)
+            self.config.retry_backoff_seconds = params.get("backoff", self.config.retry_backoff_seconds)
+
+        if cmd == "set_budget":
+            pass  # Informational — logged via activity event
+
+        # --- Harness control ---
+        if cmd == "harness_toggle":
+            enabled = params.get("enabled", False)
+            from .policy_relay import RelayPolicyHarness
+            old_state = self._policy.export_state()
+            self._policy = RelayPolicyHarness(use_harness=enabled)
+            self._policy.restore_state(old_state)
+
+        if cmd == "harness_approve":
+            self._handle_harness_approval(True, messages, sequence, turn)
+
+        if cmd == "harness_reject":
+            self._handle_harness_approval(False, messages, sequence, turn)
+
+        if cmd == "obligation_satisfy":
+            oid = params.get("obligation_id", "")
+            if hasattr(self._policy, "_harness_adapter") and self._policy._harness_adapter:
+                store = self._policy._harness_adapter.harness.store
+                from harness.types import ObligationStatus
+                store.mark_obligation(oid, ObligationStatus.SATISFIED)
+
+        if cmd == "obligation_breach":
+            oid = params.get("obligation_id", "")
+            if hasattr(self._policy, "_harness_adapter") and self._policy._harness_adapter:
+                store = self._policy._harness_adapter.harness.store
+                from harness.types import ObligationStatus
+                store.mark_obligation(oid, ObligationStatus.BREACHED)
+
+        if cmd == "harness_state":
+            self._emit_harness_state()
+
+        # Emit feedback for every command
+        self._emit_activity({
+            "kind": "command_processed",
+            "command": cmd,
+            "params": params,
+            "turn": turn,
+        })
+
+        return None
+
+    def _handle_harness_approval(self, approved: bool, messages: list, sequence: int, turn: int) -> None:
+        if self._pending_approval is None:
+            return
+        pending = self._pending_approval
+        self._pending_approval = None
+        if approved:
+            agent = self._resolve_agent(pending["agent_name"])
+            msg = self._build_message(
+                seq=sequence,
+                role="agent",
+                author=agent.name,
+                content=pending["response"],
+                metadata={
+                    "provider": agent.provider,
+                    "model": agent.model,
+                    "turn": pending["turn"],
+                    "moderator_approved": True,
+                },
+            )
+            self._commit(messages, msg)
+            self._policy.record_outcome(agent.name, pending["response"], "success", pending["action_type"])
+            self._emit_activity({
+                "kind": "approval_accepted",
+                "agent": pending["agent_name"],
+                "turn": pending["turn"],
+            })
+        else:
+            self._emit_activity({
+                "kind": "approval_rejected",
+                "agent": pending["agent_name"],
+                "turn": pending["turn"],
+            })
+
+    def _emit_harness_state(self) -> None:
+        """Emit current harness state as an activity event."""
+        if not hasattr(self._policy, "_harness_adapter") or not self._policy._harness_adapter:
+            self._emit_activity({"kind": "harness_state", "data": {"enabled": False}})
+            return
+        adapter = self._policy._harness_adapter
+        store = adapter.harness.store
+        obligations = []
+        for effect in store.effects:
+            for ob in effect.obligations:
+                obligations.append({
+                    "obligation_id": ob.obligation_id,
+                    "kind": ob.kind,
+                    "status": ob.status.value,
+                    "due_at": ob.due_at,
+                })
+        self._emit_activity({
+            "kind": "harness_state",
+            "data": {
+                "enabled": True,
+                "effects": len(store.effects),
+                "obligations": obligations,
+            },
+        })
 
     def _empty_agent_counter(self) -> dict[str, int]:
         return {
@@ -492,18 +733,14 @@ class RelayRunner:
         from .moderator import ControlCommand, ModeratorMessage
 
         seq_delta = 0
+        result = None
         for entry in self._moderator_queue.drain():
             if isinstance(entry, ControlCommand):
-                if entry.command == "stop":
-                    return ("stopped", "Stopped by moderator.", seq_delta)
-                if entry.command == "pause":
-                    return ("paused", "Paused by moderator.", seq_delta)
-                if entry.command == "more" and entry.value:
-                    self.config.turns += entry.value
-                    return ("extended", f"Extended by {entry.value} turns.", seq_delta)
-                if entry.command == "nolimit":
-                    self.config.turns = 999_999
-                    return ("extended", "Turn limit removed.", seq_delta)
+                cmd_result = self._handle_control_command(
+                    entry, messages, sequence + seq_delta, turn,
+                )
+                if cmd_result is not None:
+                    result = cmd_result
             elif isinstance(entry, ModeratorMessage):
                 msg = self._build_message(
                     seq=sequence + seq_delta,
@@ -514,7 +751,7 @@ class RelayRunner:
                 )
                 self._commit(messages, msg)
                 seq_delta += 1
-        return None if seq_delta == 0 else None
+        return result
 
     def _check_failed_attempts(self, speaker: str, failures: int) -> str | None:
         if failures < self.config.max_failed_attempts:

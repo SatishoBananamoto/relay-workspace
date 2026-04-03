@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import stat
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
+from typing import Any, IO
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,24 +23,36 @@ class ModeratorMessage:
     content: str
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class ControlCommand:
     """A control command from the moderator."""
-    command: str  # stop, pause, resume, nolimit
-    value: int | None = None  # for "more N"
+    command: str
+    value: int | None = None
+    params: dict[str, Any] = field(default_factory=dict)
 
 
 InputEntry = ModeratorMessage | ControlCommand
 
 
+def _cmd(command: str, **params: Any) -> ControlCommand:
+    """Shorthand for creating a ControlCommand with params."""
+    return ControlCommand(command=command, params=params)
+
+
 def parse_input(line: str) -> InputEntry:
-    """Parse a line of moderator input into a queue entry."""
+    """Parse a line of moderator input into a queue entry.
+
+    Supports both legacy commands (stop, pause, more 10) and new
+    structured commands (deny Claude Write, timeout 120, harness on).
+    """
     stripped = line.strip()
     if not stripped:
         return ControlCommand(command="noop")
 
     lower = stripped.lower()
+    parts = stripped.split()
 
+    # --- Legacy commands ---
     if lower == "stop":
         return ControlCommand(command="stop")
     if lower == "pause":
@@ -48,6 +61,10 @@ def parse_input(line: str) -> InputEntry:
         return ControlCommand(command="resume")
     if lower == "nolimit":
         return ControlCommand(command="nolimit")
+    if lower == "approve":
+        return ControlCommand(command="harness_approve")
+    if lower == "reject":
+        return ControlCommand(command="harness_reject")
     if lower.startswith("more"):
         rest = lower[4:].strip()
         try:
@@ -56,7 +73,88 @@ def parse_input(line: str) -> InputEntry:
         except ValueError:
             pass
 
+    # --- Permission commands: deny/allow <agent> <tool> ---
+    if len(parts) == 3 and lower.startswith(("deny ", "allow ")):
+        action = parts[0].lower()
+        agent = parts[1]
+        tool = parts[2]
+        cmd = "deny_tool" if action == "deny" else "allow_tool"
+        return _cmd(cmd, agent=agent, tool=tool)
+
+    # --- permission-mode <agent> <mode> ---
+    if len(parts) == 3 and lower.startswith("permission-mode "):
+        return _cmd("set_permission_mode", agent=parts[1], mode=parts[2])
+
+    # --- skip <agent> ---
+    if len(parts) == 2 and lower.startswith("skip "):
+        return _cmd("skip", agent=parts[1])
+
+    # --- force <agent> ---
+    if len(parts) == 2 and lower.startswith("force "):
+        return _cmd("force_next", agent=parts[1])
+
+    # --- instruction <agent> <text...> ---
+    if len(parts) >= 3 and lower.startswith("instruction "):
+        agent = parts[1]
+        instruction = " ".join(parts[2:])
+        return _cmd("set_instruction", agent=agent, instruction=instruction)
+
+    # --- timeout [<agent>] <seconds> ---
+    if lower.startswith("timeout "):
+        timeout_parts = parts[1:]
+        if len(timeout_parts) == 1:
+            try:
+                return _cmd("set_timeout", seconds=int(timeout_parts[0]))
+            except ValueError:
+                pass
+        elif len(timeout_parts) == 2:
+            try:
+                return _cmd("set_timeout", agent=timeout_parts[0], seconds=int(timeout_parts[1]))
+            except ValueError:
+                pass
+
+    # --- retry <attempts> <backoff> ---
+    if lower.startswith("retry ") and len(parts) == 3:
+        try:
+            return _cmd("set_retry", attempts=int(parts[1]), backoff=float(parts[2]))
+        except ValueError:
+            pass
+
+    # --- budget <note> ---
+    if lower.startswith("budget "):
+        return _cmd("set_budget", note=" ".join(parts[1:]))
+
+    # --- harness on/off ---
+    if lower in ("harness on", "harness off"):
+        return _cmd("harness_toggle", enabled=(lower == "harness on"))
+
+    # --- harness state ---
+    if lower == "harness state":
+        return ControlCommand(command="harness_state")
+
+    # --- satisfy/breach <obligation_id> ---
+    if len(parts) == 2 and lower.startswith("satisfy "):
+        return _cmd("obligation_satisfy", obligation_id=parts[1])
+    if len(parts) == 2 and lower.startswith("breach "):
+        return _cmd("obligation_breach", obligation_id=parts[1])
+
+    # --- Fallback: treat as moderator message ---
     return ModeratorMessage(content=stripped)
+
+
+def parse_structured_input(body: dict[str, Any]) -> InputEntry:
+    """Parse a structured JSON command from the web UI.
+
+    Accepts {command: "...", params: {...}} or {command: "..."} or {message: "..."}.
+    """
+    if "message" in body and "command" not in body:
+        return ModeratorMessage(content=body["message"])
+    command = body.get("command", "")
+    if not command:
+        return ControlCommand(command="noop")
+    params = body.get("params", {})
+    value = body.get("value")
+    return ControlCommand(command=command, value=value, params=params)
 
 
 class ModeratorInputQueue:

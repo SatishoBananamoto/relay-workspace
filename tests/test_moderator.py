@@ -62,6 +62,132 @@ def test_parse_regular_message():
     assert result.content == "Focus on error handling"
 
 
+# ── New structured commands ──────────────────────────────────────────────────
+
+
+def test_parse_deny_tool():
+    result = parse_input("deny Claude Write")
+    assert result.command == "deny_tool"
+    assert result.params == {"agent": "Claude", "tool": "Write"}
+
+
+def test_parse_allow_tool():
+    result = parse_input("allow Codex Bash")
+    assert result.command == "allow_tool"
+    assert result.params == {"agent": "Codex", "tool": "Bash"}
+
+
+def test_parse_skip():
+    result = parse_input("skip Claude")
+    assert result.command == "skip"
+    assert result.params == {"agent": "Claude"}
+
+
+def test_parse_force():
+    result = parse_input("force Codex")
+    assert result.command == "force_next"
+    assert result.params == {"agent": "Codex"}
+
+
+def test_parse_instruction():
+    result = parse_input("instruction Claude Focus on security vulnerabilities")
+    assert result.command == "set_instruction"
+    assert result.params["agent"] == "Claude"
+    assert result.params["instruction"] == "Focus on security vulnerabilities"
+
+
+def test_parse_timeout_global():
+    result = parse_input("timeout 120")
+    assert result.command == "set_timeout"
+    assert result.params == {"seconds": 120}
+
+
+def test_parse_timeout_per_agent():
+    result = parse_input("timeout Claude 300")
+    assert result.command == "set_timeout"
+    assert result.params == {"agent": "Claude", "seconds": 300}
+
+
+def test_parse_retry():
+    result = parse_input("retry 5 20.0")
+    assert result.command == "set_retry"
+    assert result.params["attempts"] == 5
+    assert result.params["backoff"] == 20.0
+
+
+def test_parse_budget():
+    result = parse_input("budget $5 max for this session")
+    assert result.command == "set_budget"
+    assert result.params["note"] == "$5 max for this session"
+
+
+def test_parse_harness_on():
+    result = parse_input("harness on")
+    assert result.command == "harness_toggle"
+    assert result.params["enabled"] is True
+
+
+def test_parse_harness_off():
+    result = parse_input("harness off")
+    assert result.command == "harness_toggle"
+    assert result.params["enabled"] is False
+
+
+def test_parse_approve():
+    result = parse_input("approve")
+    assert result.command == "harness_approve"
+
+
+def test_parse_reject():
+    result = parse_input("reject")
+    assert result.command == "harness_reject"
+
+
+def test_parse_satisfy():
+    result = parse_input("satisfy obl-123")
+    assert result.command == "obligation_satisfy"
+    assert result.params["obligation_id"] == "obl-123"
+
+
+def test_parse_breach():
+    result = parse_input("breach obl-456")
+    assert result.command == "obligation_breach"
+    assert result.params["obligation_id"] == "obl-456"
+
+
+def test_parse_harness_state():
+    result = parse_input("harness state")
+    assert result.command == "harness_state"
+
+
+def test_parse_permission_mode():
+    result = parse_input("permission-mode Claude auto")
+    assert result.command == "set_permission_mode"
+    assert result.params == {"agent": "Claude", "mode": "auto"}
+
+
+# ── parse_structured_input ───────────────────────────────────────────────────
+
+def test_structured_command():
+    from relay_discussion.moderator import parse_structured_input
+    result = parse_structured_input({"command": "deny_tool", "params": {"agent": "Claude", "tool": "Write"}})
+    assert result.command == "deny_tool"
+    assert result.params["agent"] == "Claude"
+
+
+def test_structured_message():
+    from relay_discussion.moderator import parse_structured_input
+    result = parse_structured_input({"message": "Focus harder"})
+    assert isinstance(result, ModeratorMessage)
+    assert result.content == "Focus harder"
+
+
+def test_structured_empty():
+    from relay_discussion.moderator import parse_structured_input
+    result = parse_structured_input({})
+    assert result.command == "noop"
+
+
 def test_parse_empty_is_noop():
     result = parse_input("")
     assert isinstance(result, ControlCommand)

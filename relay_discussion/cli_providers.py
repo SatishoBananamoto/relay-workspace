@@ -7,6 +7,7 @@ so the agent keeps its own conversation context across turns.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -72,6 +73,9 @@ def _format_continuation(transcript: Sequence[Message]) -> str:
     )
 
 
+_DEFAULT_TOOLS = ["Bash", "Edit", "Write", "Read", "Glob", "Grep"]
+
+
 class CliClaudeProvider(BaseProvider):
     """Wraps ``claude -p`` with persistent session support."""
 
@@ -92,6 +96,44 @@ class CliClaudeProvider(BaseProvider):
             from .workspace import WorkspaceManager
             self._workspace_mgr = WorkspaceManager(self._workspace_path)
         self._session_id: str | None = None
+        self._allowed_tools: list[str] = list(_DEFAULT_TOOLS)
+        self._denied_tools: set[str] = set()
+        self._permission_mode: str = "auto"
+
+    def deny_tool(self, tool: str) -> None:
+        self._denied_tools.add(tool)
+
+    def allow_tool(self, tool: str) -> None:
+        self._denied_tools.discard(tool)
+        if tool not in self._allowed_tools:
+            self._allowed_tools.append(tool)
+
+    def set_permission_mode(self, mode: str) -> None:
+        self._permission_mode = mode
+
+    def set_timeout(self, seconds: int) -> None:
+        self._timeout = seconds
+
+    def get_effective_tools(self) -> list[str]:
+        return [t for t in self._allowed_tools if t not in self._denied_tools]
+
+    def _permission_flags(self) -> list[str]:
+        """Build CLI flags for permissions. Called each turn."""
+        flags: list[str] = []
+        if self._workspace_path:
+            flags += ["--add-dir", str(self._workspace_path)]
+        if self._permission_mode == "dangerously-skip-permissions":
+            flags.append("--dangerously-skip-permissions")
+        else:
+            effective = self.get_effective_tools()
+            if effective:
+                flags += ["--permission-mode", self._permission_mode]
+                flags += ["--allowedTools", " ".join(effective)]
+            else:
+                # No tools allowed — deny everything via empty allowedTools
+                flags += ["--permission-mode", self._permission_mode]
+                flags += ["--allowedTools", ""]
+        return flags
 
     @property
     def session_id(self) -> str | None:
@@ -128,14 +170,7 @@ class CliClaudeProvider(BaseProvider):
         if self._session_id:
             cmd += ["--resume", self._session_id]
 
-        if self._workspace_path:
-            cmd += [
-                "--add-dir", str(self._workspace_path),
-                "--permission-mode", "auto",
-                "--allowedTools", "Bash Edit Write Read Glob Grep",
-            ]
-        else:
-            cmd.append("--dangerously-skip-permissions")
+        cmd += self._permission_flags()
 
         try:
             result = subprocess.run(
@@ -195,12 +230,7 @@ class CliClaudeProvider(BaseProvider):
         ]
         if self._session_id:
             cmd += ["--resume", self._session_id]
-        if self._workspace_path:
-            cmd += [
-                "--add-dir", str(self._workspace_path),
-                "--permission-mode", "auto",
-                "--allowedTools", "Bash Edit Write Read Glob Grep",
-            ]
+        cmd += self._permission_flags()
 
         proc = subprocess.Popen(
             cmd,
@@ -261,6 +291,9 @@ class CliCodexProvider(BaseProvider):
             self._workspace_mgr = WorkspaceManager(self._workspace_path)
         self._session_id: str | None = None
 
+    def set_timeout(self, seconds: int) -> None:
+        self._timeout = seconds
+
     @property
     def session_id(self) -> str | None:
         return self._session_id
@@ -285,7 +318,9 @@ class CliCodexProvider(BaseProvider):
         if not prompt:
             prompt = "Continue."
 
-        out_file = Path(tempfile.mktemp(suffix=".md", prefix="relay_codex_"))
+        out_fd, out_path = tempfile.mkstemp(suffix=".md", prefix="relay_codex_")
+        os.close(out_fd)
+        out_file = Path(out_path)
 
         if is_first_call:
             cmd = ["codex", "exec", "-", "--skip-git-repo-check", "--full-auto"]
