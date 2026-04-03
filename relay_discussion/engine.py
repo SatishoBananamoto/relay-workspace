@@ -204,6 +204,13 @@ class RelayRunner:
                 agent=agent, transcript=messages, turn=turn,
             )
             if failure_reason is not None:
+                self._emit_activity({
+                    "kind": "agent_failed",
+                    "agent": agent.name,
+                    "turn": turn,
+                    "failure_type": failure_type,
+                    "failure_reason": failure_reason,
+                })
                 if self._observer:
                     self._observer.on_turn_end(turn, agent.name, success=False, failure_type=failure_type)
                 failed_attempts[agent.name] += 1

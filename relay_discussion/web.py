@@ -164,11 +164,15 @@ class WebViewer:
         """Callback for engine activity events — thinking, harness eval, turn committed."""
         self._bus.publish({"type": "activity", "data": activity})
 
-        # Update thinking state
+        # Update thinking state and push status update so status bar reflects current agent
         kind = activity.get("kind")
         if kind == "thinking":
             self._current_agent = activity.get("agent", self._current_agent)
             self._current_turn = activity.get("turn", self._current_turn)
+            self._bus.publish({
+                "type": "status",
+                "data": self._status_dict(),
+            })
 
     def update_status(self, status: str) -> None:
         self._status = status
@@ -764,6 +768,11 @@ _INDEX_HTML = """<!DOCTYPE html>
       </div>
 
       <h3>Inject Message</h3>
+      <div style="display:flex;gap:6px;margin-bottom:4px">
+        <select id="msg-target" style="padding:4px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px">
+          <option value="both">To: Both</option>
+        </select>
+      </div>
       <div id="msg-input">
         <input type="text" id="inject-text" placeholder="Message to agents..." onkeydown="if(event.key==='Enter')sendMessage()">
         <button class="btn" onclick="sendMessage()">Send</button>
@@ -1065,13 +1074,15 @@ async function sendCmd(command, params) {
 
 async function sendMessage() {
   const input = document.getElementById('inject-text');
+  const target = document.getElementById('msg-target').value;
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
+  const prefix = target !== 'both' ? '[To ' + target + '] ' : '';
   await fetch('/control', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({message: text}),
+    body: JSON.stringify({message: prefix + text}),
   });
 }
 
@@ -1256,6 +1267,19 @@ function handleActivity(data) {
     }
   } else if (kind === 'tool_event') {
     handleToolEvent(data);
+  } else if (kind === 'agent_failed') {
+    hideThinking();
+    showToast(data.agent + ' failed: ' + (data.failure_reason || data.failure_type || 'unknown'));
+    // Add to harness feed for visibility
+    harnessEmpty.style.display = 'none';
+    const div = document.createElement('div');
+    div.className = 'harness-event';
+    div.innerHTML =
+      '<span class="decision-badge decision-block">FAIL</span>' +
+      '<strong>' + escapeHtml(data.agent || '?') + '</strong> T' + (data.turn || '?') +
+      '<div style="font-size:11px;color:#f85149;margin-top:2px">' +
+      escapeHtml(data.failure_type || '') + ': ' + escapeHtml(data.failure_reason || '') + '</div>';
+    harnessFeed.appendChild(div);
   }
 }
 
@@ -1266,18 +1290,36 @@ fetch('/state').then(r => r.json()).then(data => {
   // We don't know agent names from state alone — they'll come from messages
 });
 
-// Track agents from messages
+// Track agents from messages AND activity events
 const knownAgents = new Set();
+let controlsBuilt = false;
+
+function registerAgent(name) {
+  if (!name || knownAgents.has(name)) return;
+  knownAgents.add(name);
+  // Add to message target dropdown
+  const msgTarget = document.getElementById('msg-target');
+  const opt = document.createElement('option');
+  opt.value = name;
+  opt.textContent = 'To: ' + name;
+  msgTarget.appendChild(opt);
+  if (knownAgents.size >= 2 && !controlsBuilt) {
+    controlsBuilt = true;
+    buildSteeringBtns([...knownAgents]);
+    buildPermPanels([...knownAgents]);
+  }
+}
+
 const origAppendMessage = appendMessage;
 appendMessage = function(msg) {
-  if (msg.role === 'agent' && !knownAgents.has(msg.author)) {
-    knownAgents.add(msg.author);
-    if (knownAgents.size <= 2) {
-      buildSteeringBtns([...knownAgents]);
-      buildPermPanels([...knownAgents]);
-    }
-  }
+  if (msg.role === 'agent') registerAgent(msg.author);
   origAppendMessage(msg);
+};
+
+const origHandleActivity = handleActivity;
+handleActivity = function(data) {
+  if (data.agent) registerAgent(data.agent);
+  origHandleActivity(data);
 };
 </script>
 </body>
