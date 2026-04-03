@@ -1547,9 +1547,9 @@ function registerAgent(name) {
 }
 
 const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku'];
-const CODEX_MODELS = ['gpt-5.4'];
+const CODEX_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex', 'gpt-5.2', 'gpt-5.1-codex-max', 'gpt-5.1-codex-mini'];
 const CLAUDE_EFFORTS = ['max', 'high', 'medium', 'low'];
-const CODEX_EFFORTS = ['xhigh', 'high', 'medium', 'low'];
+const CODEX_EFFORTS = ['xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
 
 function buildModelControls(agentInfos) {
   const container = document.getElementById('model-controls');
