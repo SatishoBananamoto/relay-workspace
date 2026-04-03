@@ -222,8 +222,8 @@ class TestCliClaudeProvider:
             )
 
         with patch("relay_discussion.cli_providers.subprocess.run", mock_empty):
-            response = provider.generate(agent, transcript, turn=1)
-            assert response == ""
+            with pytest.raises(ProviderError, match="empty result"):
+                provider.generate(agent, transcript, turn=1)
 
     def test_workspace_flags_added_in_build_mode(self):
         provider = CliClaudeProvider(workspace_path="/tmp/ws")

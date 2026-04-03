@@ -205,7 +205,18 @@ class CliClaudeProvider(BaseProvider):
 
         self._session_id = data.get("session_id") or self._session_id
         response = data.get("result", "")
-        return response.strip() if response else ""
+        if not response or not response.strip():
+            # Surface what Claude actually returned for debugging
+            stderr_hint = result.stderr.strip()[:200] if result.stderr else ""
+            keys = list(data.keys())
+            raise ProviderError(
+                f"Claude returned empty result. "
+                f"Keys in response: {keys}. "
+                f"is_error={data.get('is_error')}. "
+                f"session_id={data.get('session_id', 'none')}. "
+                f"stderr: {stderr_hint or 'none'}"
+            )
+        return response.strip()
 
     @property
     def supports_streaming(self) -> bool:
