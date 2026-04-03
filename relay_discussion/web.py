@@ -1547,7 +1547,7 @@ function registerAgent(name) {
 }
 
 const CLAUDE_MODELS = ['opus', 'sonnet', 'haiku'];
-const CODEX_MODELS = ['gpt-5.4', 'o3', 'o4-mini', 'gpt-4.1'];
+const CODEX_MODELS = ['gpt-5.4'];
 const CLAUDE_EFFORTS = ['max', 'high', 'medium', 'low'];
 const CODEX_EFFORTS = ['xhigh', 'high', 'medium', 'low'];
 
