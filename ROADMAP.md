@@ -34,13 +34,41 @@ Core engine, web viewer, and controls work. 295 tests passing. Ready for real se
 
 ### Session Management (Next)
 
-| # | Feature | Detail |
-|---|---------|--------|
-| F1 | `relay list` improvements | Show session status, turns completed, last activity, provider info |
-| F2 | `relay watch <session_id>` | Connect to running session from another terminal (SSE via curl or formatted CLI) |
-| F3 | Multi-session dashboard | Web page listing all sessions, click to open viewer |
-| F4 | Session cleanup | `relay archive` / `relay delete` with confirmation |
-| F5 | Session export | Export transcript as Markdown, not just JSONL |
+**Current state:** 25 sessions in `~/.relay/sessions/`, 14 stuck as "running" (zombies), 0 archived. Sessions identified only by UUID.
+
+**Storage layout:**
+```
+~/.relay/
+  sessions/<uuid>/
+    meta.json           # id, topic, agents, status, timestamps, turns
+    transcript.jsonl    # every message (append-only)
+    workspace/          # only if --build mode
+  archive/              # move target for archived sessions
+```
+
+**Existing commands:** `new`, `resume`, `list`, `archive`, `say`
+
+**Session lifecycle:**
+```
+new → running → paused ↔ running → completed → archived
+                                        ↓
+                                    archived
+```
+
+#### Fixes (S1–S10)
+
+| # | Fix | Detail | Priority |
+|---|-----|--------|----------|
+| S1 | Zombie session cleanup | 14 sessions stuck as "running" but process is dead. Add `relay cleanup` that finds sessions with status=running, checks if process is alive (via PID file or lock), marks dead ones as "crashed". | High |
+| S2 | Crash-safe status | Write a PID file or lock file when engine starts. On startup, check if previous PID is alive. If not, mark session as "crashed" not "running". | High |
+| S3 | `relay delete <id>` | Delete a session entirely (rm -rf the directory). With `--confirm` or interactive prompt. `relay delete --zombies` to clean all crashed/zombie sessions. | High |
+| S4 | Session naming | Add `--name <name>` flag to `relay new`. Store in meta.json. Show in `relay list`. Allow `relay resume <name>` by name, not just UUID. | High |
+| S5 | Better `relay list` | Show: short ID (first 8 chars), name (if set), status, turns, created date, agents, providers. Tabular format with colors. `--json` for machine-readable. | Medium |
+| S6 | `relay show <id>` | Print full session details: meta, transcript stats (message count per role, total tokens if tracked), workspace contents if build mode. | Medium |
+| S7 | `relay export <id>` | Export transcript as readable Markdown. Agent messages formatted, system messages as notes, moderator as blockquotes. | Medium |
+| S8 | Fix `relay say` | FIFO path not created by web/engine. Either create FIFO on session start, or replace with HTTP POST to the running web viewer (`curl localhost:8411/control`). | Medium |
+| S9 | `relay watch <id>` | CLI command that connects to a running session's SSE stream and prints formatted output. Like `docker logs -f` for relay. Uses `curl` to `/events` endpoint. | Low |
+| S10 | Resume zombie sessions | Allow `relay resume` on sessions with status="running" (zombies) — treat them as paused. Currently only paused sessions can be resumed. | Medium |
 
 ### Web Viewer Enhancements
 
