@@ -70,6 +70,8 @@ class RelayRunner:
             kwargs: dict[str, object] = {}
             if agent.provider in ("cli-claude", "cli-codex") and self._workspace_path:
                 kwargs["workspace_path"] = self._workspace_path
+            if agent.provider == "cli-claude" and agent.model and agent.model != "mirror":
+                kwargs["model"] = agent.model
             provider = get_provider(agent.provider, **kwargs)
             # Wire tool event callback if provider supports it
             if hasattr(provider, "on_tool_event") and self._on_activity:
@@ -474,6 +476,28 @@ class RelayRunner:
                         provider.set_timeout(seconds)
 
         # --- Session settings ---
+        if cmd == "set_model":
+            agent_name = params.get("agent", "")
+            model = params.get("model", "")
+            try:
+                side = self._resolve_side(agent_name)
+                provider = self._providers.get(side)
+                if provider and hasattr(provider, "set_model"):
+                    provider.set_model(model)
+            except ValueError:
+                pass
+
+        if cmd == "set_effort":
+            agent_name = params.get("agent", "")
+            effort = params.get("effort", "")
+            try:
+                side = self._resolve_side(agent_name)
+                provider = self._providers.get(side)
+                if provider and hasattr(provider, "set_effort"):
+                    provider.set_effort(effort)
+            except ValueError:
+                pass
+
         if cmd == "set_retry":
             self.config.retry_attempts = params.get("attempts", self.config.retry_attempts)
             self.config.retry_backoff_seconds = params.get("backoff", self.config.retry_backoff_seconds)

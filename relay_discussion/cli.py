@@ -449,6 +449,12 @@ def _apply_config_overrides(config: RelayConfig, overrides: dict) -> None:
         config.left_agent.instruction = overrides["left_instruction"]
     if "right_instruction" in overrides:
         config.right_agent.instruction = overrides["right_instruction"]
+    if "left_model" in overrides:
+        config.left_agent.model = overrides["left_model"]
+    if "right_model" in overrides:
+        config.right_agent.model = overrides["right_model"]
+    # Effort is stored on the provider, not the config — pass through as-is
+    # The engine will apply these after providers are created
 
 
 def _cmd_new(argv: list[str]) -> int:

@@ -124,6 +124,14 @@ def parse_input(line: str) -> InputEntry:
     if lower.startswith("budget "):
         return _cmd("set_budget", note=" ".join(parts[1:]))
 
+    # --- model <agent> <model> ---
+    if len(parts) == 3 and lower.startswith("model "):
+        return _cmd("set_model", agent=parts[1], model=parts[2])
+
+    # --- effort <agent> <level> ---
+    if len(parts) == 3 and lower.startswith("effort "):
+        return _cmd("set_effort", agent=parts[1], effort=parts[2])
+
     # --- harness on/off ---
     if lower in ("harness on", "harness off"):
         return _cmd("harness_toggle", enabled=(lower == "harness on"))

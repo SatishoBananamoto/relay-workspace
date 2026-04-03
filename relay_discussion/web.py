@@ -379,6 +379,20 @@ def run_relay_with_web(
                 on_activity=viewer.on_activity,
                 config_overrides=overrides,
             )
+            # Queue effort overrides — they'll be applied when providers are created
+            # (providers are created lazily on first use during run())
+            if overrides.get("left_effort") or overrides.get("right_effort"):
+                from .moderator import ControlCommand
+                if overrides.get("left_effort"):
+                    moderator_queue.put(ControlCommand(
+                        command="set_effort",
+                        params={"agent": runner.config.left_agent.name, "effort": overrides["left_effort"]},
+                    ))
+                if overrides.get("right_effort"):
+                    moderator_queue.put(ControlCommand(
+                        command="set_effort",
+                        params={"agent": runner.config.right_agent.name, "effort": overrides["right_effort"]},
+                    ))
             result = runner.run(resume=resume)
             result_holder.append(result)
         except Exception as exc:
@@ -766,23 +780,59 @@ _INDEX_HTML = """<!DOCTYPE html>
 
 <!-- Lobby overlay -->
 <div id="lobby" style="position:fixed;inset:0;background:#0d1117ee;z-index:200;display:flex;align-items:center;justify-content:center">
-  <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;width:480px;max-width:90vw">
+  <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;width:520px;max-width:90vw">
     <h2 style="color:#c9d1d9;font-size:16px;margin-bottom:16px">Session Settings</h2>
     <div style="margin-bottom:12px">
       <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Topic</label>
       <div id="lobby-topic" style="font-size:13px;color:#c9d1d9;padding:8px;background:#0d1117;border-radius:4px;border:1px solid #30363d;max-height:60px;overflow:auto"></div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
       <div>
         <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Turns</label>
         <input type="number" id="lobby-turns" value="4" min="1" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:13px;font-family:inherit">
       </div>
       <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Auto-start in</label>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Left Model</label>
+        <select id="lobby-left-model" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+          <option value="opus" selected>Opus</option>
+          <option value="sonnet">Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Right Model</label>
+        <select id="lobby-right-model" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+          <option value="opus">Opus</option>
+          <option value="sonnet" selected>Sonnet</option>
+          <option value="haiku">Haiku</option>
+        </select>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
+      <div>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Auto-start</label>
         <div style="display:flex;align-items:center;gap:8px">
-          <span id="lobby-countdown" style="font-size:24px;color:#58a6ff;font-weight:600">10</span>
-          <span style="font-size:12px;color:#8b949e">seconds</span>
+          <span id="lobby-countdown" style="font-size:24px;color:#58a6ff;font-weight:600">30</span>
+          <span style="font-size:12px;color:#8b949e">sec</span>
         </div>
+      </div>
+      <div>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Left Effort</label>
+        <select id="lobby-left-effort" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+          <option value="max" selected>Max</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Right Effort</label>
+        <select id="lobby-right-effort" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+          <option value="max" selected>Max</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
       </div>
     </div>
     <div style="margin-bottom:12px">
@@ -835,6 +885,9 @@ _INDEX_HTML = """<!DOCTYPE html>
         <button class="btn" onclick="sendControl('more 10')">More +10</button>
         <button class="btn" onclick="sendControl('nolimit')">No Limit</button>
       </div>
+
+      <h3>Model / Effort</h3>
+      <div id="model-controls"></div>
 
       <h3>Steering</h3>
       <div class="btn-row" id="steering-btns"></div>
@@ -1373,10 +1426,10 @@ fetch('/state').then(r => r.json()).then(data => {
 
 // --- Lobby ---
 let lobbyTimer = null;
-let lobbyCountdown = 10;
+let lobbyCountdown = 30;
 
 function startLobbyCountdown() {
-  lobbyCountdown = 10;
+  lobbyCountdown = 30;
   document.getElementById('lobby-countdown').textContent = lobbyCountdown;
   lobbyTimer = setInterval(() => {
     lobbyCountdown--;
@@ -1403,6 +1456,10 @@ async function lobbyStart() {
   if (leftInstr) overrides.left_instruction = leftInstr;
   const rightInstr = document.getElementById('lobby-right-instr').value.trim();
   if (rightInstr) overrides.right_instruction = rightInstr;
+  overrides.left_model = document.getElementById('lobby-left-model').value;
+  overrides.right_model = document.getElementById('lobby-right-model').value;
+  overrides.left_effort = document.getElementById('lobby-left-effort').value;
+  overrides.right_effort = document.getElementById('lobby-right-effort').value;
   await fetch('/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -1441,7 +1498,39 @@ function registerAgent(name) {
     controlsBuilt = true;
     buildSteeringBtns([...knownAgents]);
     buildPermPanels([...knownAgents]);
+    buildModelControls([...knownAgents]);
   }
+}
+
+function buildModelControls(agents) {
+  const container = document.getElementById('model-controls');
+  container.innerHTML = '';
+  const models = ['opus', 'sonnet', 'haiku'];
+  const efforts = ['max', 'high', 'medium', 'low'];
+  agents.forEach(agent => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:6px;font-size:12px';
+    row.innerHTML = '<span style="width:50px;color:#8b949e">' + escapeHtml(agent) + '</span>';
+    const mSel = document.createElement('select');
+    mSel.style.cssText = 'padding:3px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px';
+    models.forEach(m => {
+      const o = document.createElement('option');
+      o.value = m; o.textContent = m.charAt(0).toUpperCase() + m.slice(1);
+      mSel.appendChild(o);
+    });
+    mSel.onchange = () => sendCmd('set_model', {agent, model: mSel.value});
+    row.appendChild(mSel);
+    const eSel = document.createElement('select');
+    eSel.style.cssText = 'padding:3px 6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px';
+    efforts.forEach(e => {
+      const o = document.createElement('option');
+      o.value = e; o.textContent = e.charAt(0).toUpperCase() + e.slice(1);
+      eSel.appendChild(o);
+    });
+    eSel.onchange = () => sendCmd('set_effort', {agent, effort: eSel.value});
+    row.appendChild(eSel);
+    container.appendChild(row);
+  });
 }
 
 const origAppendMessage = appendMessage;

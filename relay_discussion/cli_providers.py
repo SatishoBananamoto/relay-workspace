@@ -100,6 +100,12 @@ class CliClaudeProvider(BaseProvider):
         self._denied_tools: set[str] = set()
         self._permission_mode: str = "auto"
 
+    def set_model(self, model: str) -> None:
+        self._model = model
+
+    def set_effort(self, effort: str) -> None:
+        self._effort = effort
+
     def deny_tool(self, tool: str) -> None:
         self._denied_tools.add(tool)
 
