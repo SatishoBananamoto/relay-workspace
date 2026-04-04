@@ -807,13 +807,7 @@ _INDEX_HTML = """<!DOCTYPE html>
 <!-- Lobby overlay — full session config -->
 <div id="lobby" style="position:fixed;inset:0;background:#0d1117;z-index:200;display:flex;align-items:center;justify-content:center;overflow-y:auto;padding:20px">
   <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:28px;width:600px;max-width:95vw">
-    <h2 style="color:#c9d1d9;font-size:18px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between">
-      New Relay Session
-      <span style="font-size:12px;color:#484f58">
-        Auto-start: <span id="lobby-countdown" style="color:#58a6ff;font-weight:600">30</span>s
-        <button onclick="lobbyCancelAuto()" style="background:none;border:1px solid #30363d;border-radius:3px;color:#8b949e;font-size:11px;padding:2px 6px;cursor:pointer;margin-left:4px">Cancel</button>
-      </span>
-    </h2>
+    <h2 style="color:#c9d1d9;font-size:18px;margin-bottom:20px">New Relay Session</h2>
 
     <!-- Topic -->
     <div style="margin-bottom:16px">
@@ -1603,30 +1597,8 @@ function selectMode(mode) {
 }
 
 // --- Lobby ---
-let lobbyTimer = null;
-let lobbyCountdown = 30;
-
-function startLobbyCountdown() {
-  lobbyCountdown = 30;
-  document.getElementById('lobby-countdown').textContent = lobbyCountdown;
-  lobbyTimer = setInterval(() => {
-    lobbyCountdown--;
-    document.getElementById('lobby-countdown').textContent = lobbyCountdown;
-    if (lobbyCountdown <= 0) {
-      clearInterval(lobbyTimer);
-      lobbyStart();
-    }
-  }, 1000);
-}
-
-function lobbyCancelAuto() {
-  if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
-  document.getElementById('lobby-countdown').textContent = '--';
-}
 
 async function lobbyStart() {
-  if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
-
   const topic = document.getElementById('lobby-topic').value.trim();
   if (!topic) {
     document.getElementById('lobby-topic').style.borderColor = '#f85149';
@@ -1653,19 +1625,18 @@ async function lobbyStart() {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(overrides),
   });
+
+  // Update sidebar model/effort to match what was selected
+  if (agentInfos[0]) updateModelDisplay(agentInfos[0].name, overrides.left_model, overrides.left_effort);
+  if (agentInfos[1]) updateModelDisplay(agentInfos[1].name, overrides.right_model, overrides.right_effort);
 }
 
-// Start countdown when lobby is visible
-if (document.getElementById('lobby').style.display !== 'none') {
-  startLobbyCountdown();
-}
 
 // Hide lobby when status changes from lobby
 evtSource.addEventListener('status', (e) => {
   const data = JSON.parse(e.data);
   if (data.status !== 'lobby') {
     document.getElementById('lobby').style.display = 'none';
-    if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
   }
 });
 
