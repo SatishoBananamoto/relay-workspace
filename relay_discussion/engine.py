@@ -211,11 +211,16 @@ class RelayRunner:
                 self._observer.on_turn_start(turn, agent.name)
 
             self._tool_call_count = 0  # reset per turn
+            # Emit current model/effort config for this agent
+            _side = "left" if agent is self.config.left_agent else "right"
+            _prov = self._providers.get(_side)
             self._emit_activity({
                 "kind": "thinking",
                 "agent": agent.name,
                 "turn": turn,
                 "provider": agent.provider,
+                "model": getattr(_prov, "_model", None) or agent.model if _prov else agent.model,
+                "effort": getattr(_prov, "_effort", None) or "",
             })
 
             response, failure_type, failure_reason = self._attempt_with_retry(

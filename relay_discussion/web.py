@@ -1122,6 +1122,18 @@ function handleToolEvent(data) {
     toolActivity.appendChild(line);
     toolActivity.scrollTop = toolActivity.scrollHeight;
     thinkingText.textContent = (data.agent || '') + ' reasoning...';
+  } else if (evt === 'model_info') {
+    // Claude's actual model from response — update sidebar with verified model
+    const models = data.models || {};
+    const actualModel = Object.keys(models)[0];
+    if (actualModel && data.agent) {
+      updateModelDisplay(data.agent, actualModel, null);
+    }
+    const line = document.createElement('div');
+    line.className = 'tool-line';
+    line.style.color = '#8b949e';
+    line.textContent = 'model: ' + (actualModel || '?');
+    toolActivity.appendChild(line);
   } else if (evt === 'usage') {
     const line = document.createElement('div');
     line.className = 'tool-line';
@@ -1372,11 +1384,36 @@ function hideApproval() {
   document.getElementById('approval-panel').style.display = 'none';
 }
 
+// --- Update sidebar model/effort to reflect actual state ---
+function updateModelDisplay(agent, model, effort) {
+  const sels = modelSelectors[agent];
+  if (!sels) return;
+  if (model && sels.model) {
+    // Try to select matching option
+    let found = false;
+    for (const opt of sels.model.options) {
+      if (opt.value === model) { opt.selected = true; found = true; break; }
+    }
+    // If exact model not in list (e.g. full ID like claude-haiku-4-5-20251001), add it
+    if (!found) {
+      const opt = document.createElement('option');
+      opt.value = model; opt.textContent = model; opt.selected = true;
+      sels.model.appendChild(opt);
+    }
+  }
+  if (effort && sels.effort) {
+    for (const opt of sels.effort.options) {
+      if (opt.value === effort) { opt.selected = true; break; }
+    }
+  }
+}
+
 // --- Activity handler (extended) ---
 function handleActivity(data) {
   const kind = data.kind;
   if (kind === 'thinking') {
     showThinking(data.agent, data.turn, data.provider);
+    if (data.model || data.effort) updateModelDisplay(data.agent, data.model, data.effort);
   } else if (kind === 'harness_eval') {
     hideThinking();
     appendHarnessEvent(data);
@@ -1559,6 +1596,9 @@ const CODEX_MODELS = ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex', 'gpt-5.2-codex
 const CLAUDE_EFFORTS = ['max', 'high', 'medium', 'low'];
 const CODEX_EFFORTS = ['xhigh', 'high', 'medium', 'low', 'minimal', 'none'];
 
+// Track model control elements for live updates
+const modelSelectors = {};  // {agentName: {model: selectEl, effort: selectEl}}
+
 function buildModelControls(agentInfos) {
   const container = document.getElementById('model-controls');
   container.innerHTML = '';
@@ -1597,6 +1637,11 @@ function buildModelControls(agentInfos) {
       row.innerHTML += '<span style="color:#484f58;font-size:11px">(mock)</span>';
     }
     container.appendChild(row);
+    // Store refs for live updates
+    modelSelectors[info.name] = {model: row.querySelector('select'), effort: null};
+    const selects = row.querySelectorAll('select');
+    if (selects.length > 0) modelSelectors[info.name].model = selects[0];
+    if (selects.length > 1) modelSelectors[info.name].effort = selects[1];
   });
 }
 
