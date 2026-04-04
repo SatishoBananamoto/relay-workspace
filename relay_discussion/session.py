@@ -7,6 +7,7 @@ with a meta.json file and a transcript.jsonl file.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -29,6 +30,7 @@ class SessionMeta:
     created: str
     updated: str
     turns_completed: int = 0
+    name: str = ""
     build_mode: bool = False
     left_provider: str = "mock"
     right_provider: str = "mock"
@@ -68,6 +70,7 @@ class SessionManager:
         left_agent_name: str,
         right_agent_name: str,
         moderator: str = "Satisho",
+        name: str = "",
         build_mode: bool = False,
         left_provider: str = "mock",
         right_provider: str = "mock",
@@ -87,6 +90,7 @@ class SessionManager:
             status="new",
             created=now,
             updated=now,
+            name=name,
             build_mode=build_mode,
             left_provider=left_provider,
             right_provider=right_provider,
@@ -117,6 +121,18 @@ class SessionManager:
             raise ValueError(f"Session not found: {session_id}")
         data = json.loads(meta_path.read_text())
         return SessionMeta.from_dict(data)
+
+    def get_session_by_name(self, name: str) -> SessionMeta | None:
+        """Find a session by its human-readable name."""
+        self._ensure_dirs()
+        for meta_path in self._sessions_dir.glob("*/meta.json"):
+            try:
+                data = json.loads(meta_path.read_text())
+                if data.get("name") == name:
+                    return SessionMeta.from_dict(data)
+            except (json.JSONDecodeError, TypeError, KeyError):
+                continue
+        return None
 
     def list_sessions(self, status_filter: str | None = None) -> list[SessionMeta]:
         self._ensure_dirs()
@@ -158,6 +174,45 @@ class SessionManager:
         self._write_meta(session_id, meta)
         dst = self._archive_dir / session_id
         shutil.move(str(src), str(dst))
+
+    def delete_session(self, session_id: str) -> None:
+        """Permanently delete a session directory."""
+        session_dir = self._sessions_dir / session_id
+        if not session_dir.exists():
+            raise ValueError(f"Session not found: {session_id}")
+        shutil.rmtree(session_dir)
+
+    def write_pid(self, session_id: str) -> None:
+        """Write current PID to session directory."""
+        pid_path = self._sessions_dir / session_id / "engine.pid"
+        pid_path.write_text(str(os.getpid()))
+
+    def read_pid(self, session_id: str) -> int | None:
+        """Read stored PID, or None if no PID file."""
+        pid_path = self._sessions_dir / session_id / "engine.pid"
+        if not pid_path.exists():
+            return None
+        try:
+            return int(pid_path.read_text().strip())
+        except (ValueError, OSError):
+            return None
+
+    def is_engine_alive(self, session_id: str) -> bool:
+        """Check if the engine process for this session is still running."""
+        pid = self.read_pid(session_id)
+        if pid is None:
+            return False
+        try:
+            os.kill(pid, 0)  # signal 0 = check if process exists
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True  # process exists but we can't signal it
+
+    def clear_pid(self, session_id: str) -> None:
+        pid_path = self._sessions_dir / session_id / "engine.pid"
+        pid_path.unlink(missing_ok=True)
 
     def get_transcript_path(self, session_id: str) -> Path:
         return self._sessions_dir / session_id / "transcript.jsonl"

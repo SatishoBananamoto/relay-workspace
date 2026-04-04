@@ -394,7 +394,7 @@ def _parse_fault_script(raw: str) -> list[str]:
 
 # ── Subcommand handlers (relay new / resume / list / archive / say) ───────────
 
-SUBCOMMANDS = {"new", "resume", "list", "archive", "say"}
+SUBCOMMANDS = {"new", "resume", "list", "archive", "delete", "cleanup", "say"}
 
 
 def cli_entry(argv: list[str] | None = None) -> int:
@@ -411,6 +411,10 @@ def cli_entry(argv: list[str] | None = None) -> int:
             return _cmd_list(rest)
         if cmd == "archive":
             return _cmd_archive(rest)
+        if cmd == "delete":
+            return _cmd_delete(rest)
+        if cmd == "cleanup":
+            return _cmd_cleanup(rest)
         if cmd == "say":
             return _cmd_say(rest)
     # Legacy mode: no subcommand, use original argument parser
@@ -420,6 +424,7 @@ def cli_entry(argv: list[str] | None = None) -> int:
 def _build_new_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="relay new", description="Start a new relay session.")
     parser.add_argument("--topic", required=True, help="Discussion topic.")
+    parser.add_argument("--name", help="Human-readable session name (e.g. 'API design debate').")
     parser.add_argument("--turns", type=int, default=None, help="Max turns (default from config).")
     parser.add_argument("--no-limit", action="store_true", help="No turn limit.")
     parser.add_argument("--build", action="store_true", help="Enable build mode with shared workspace.")
@@ -480,6 +485,7 @@ def _cmd_new(argv: list[str]) -> int:
         left_agent_name=left_name,
         right_agent_name=right_name,
         moderator=moderator,
+        name=args.name or "",
         build_mode=args.build,
         left_provider=left_provider,
         right_provider=right_provider,
@@ -515,6 +521,7 @@ def _cmd_new(argv: list[str]) -> int:
     transcript_path = mgr.get_transcript_path(meta.id)
     ws_path = mgr.get_workspace_path(meta.id) if args.build else None
     mgr.update_status(meta.id, "running")
+    mgr.write_pid(meta.id)
 
     if args.tui and args.web:
         print("ERROR: --tui and --web are mutually exclusive.", file=sys.stderr)
@@ -639,7 +646,7 @@ def _cmd_resume(argv: list[str]) -> int:
     from .session import SessionManager
 
     parser = argparse.ArgumentParser(prog="relay resume", description="Resume a paused session.")
-    parser.add_argument("session_id", nargs="?", help="Session ID (default: most recent paused).")
+    parser.add_argument("session_id", nargs="?", help="Session ID or name (default: most recent paused).")
     parser.add_argument("--turns", type=int, help="Override max turns.")
     parser.add_argument("--no-limit", action="store_true", help="No turn limit.")
     parser.add_argument("--build", action="store_true", help="Enable build mode (if not already).")
@@ -651,14 +658,22 @@ def _cmd_resume(argv: list[str]) -> int:
     mgr = SessionManager()
 
     if args.session_id:
-        session_id = args.session_id
+        # Try as name first, then as ID
+        by_name = mgr.get_session_by_name(args.session_id)
+        session_id = by_name.id if by_name else args.session_id
     else:
         paused = mgr.list_sessions(status_filter="paused")
         if not paused:
-            print("No paused sessions found.", file=sys.stderr)
-            return 1
+            # Also check for crashed/zombie running sessions
+            resumable = mgr.list_sessions()
+            resumable = [s for s in resumable if s.status in ("paused", "running", "crashed")]
+            if not resumable:
+                print("No resumable sessions found.", file=sys.stderr)
+                return 1
+            paused = resumable
         session_id = paused[0].id
-        print(f"Resuming most recent paused session: {session_id}")
+        name_hint = f" ({paused[0].name})" if paused[0].name else ""
+        print(f"Resuming most recent session: {session_id[:8]}{name_hint} [{paused[0].status}]")
 
     meta = mgr.get_session(session_id)
     transcript_path = mgr.get_transcript_path(session_id)
@@ -713,6 +728,7 @@ def _cmd_resume(argv: list[str]) -> int:
 
     starting_count = len(TranscriptStore(transcript_path).read())
     mgr.update_status(session_id, "running")
+    mgr.write_pid(session_id)
 
     if args.tui and args.web:
         print("ERROR: --tui and --web are mutually exclusive.", file=sys.stderr)
@@ -836,17 +852,23 @@ def _cmd_list(argv: list[str]) -> int:
     sessions = mgr.list_sessions(status_filter=args.status)
 
     if not args.all and not args.status:
-        sessions = [s for s in sessions if s.status in ("new", "running", "paused")]
+        sessions = [s for s in sessions if s.status in ("new", "running", "paused", "crashed")]
 
     if not sessions:
         print("No sessions found.")
         return 0
 
-    print(f"{'ID':36s}  {'Status':10s}  {'Turns':5s}  {'Topic'}")
-    print("-" * 90)
+    print(f"{'ID':10s} {'Name':20s} {'Status':10s} {'Turns':5s} {'Agents':25s} {'Created':12s} {'Topic'}")
+    print("-" * 120)
     for s in sessions:
-        topic_short = s.topic[:40] + "..." if len(s.topic) > 40 else s.topic
-        print(f"{s.id}  {s.status:10s}  {s.turns_completed:5d}  {topic_short}")
+        sid = s.id[:8]
+        name = s.name[:18] + ".." if len(s.name) > 20 else s.name if s.name else ""
+        agents = f"{s.left_agent_name}({s.left_provider.replace('cli-','')})/{s.right_agent_name}({s.right_provider.replace('cli-','')})"
+        if len(agents) > 25:
+            agents = agents[:23] + ".."
+        created = s.created[:10] if s.created else ""
+        topic_short = s.topic[:35] + "..." if len(s.topic) > 35 else s.topic
+        print(f"{sid:10s} {name:20s} {s.status:10s} {s.turns_completed:5d} {agents:25s} {created:12s} {topic_short}")
 
     return 0
 
@@ -865,6 +887,130 @@ def _cmd_archive(argv: list[str]) -> int:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _cmd_delete(argv: list[str]) -> int:
+    """Delete sessions."""
+    from .session import SessionManager
+    from .transcript import TranscriptStore
+
+    parser = argparse.ArgumentParser(prog="relay delete", description="Delete sessions.")
+    parser.add_argument("session_id", nargs="?", help="Session ID to delete.")
+    parser.add_argument("--zombies", action="store_true", help="Delete all zombie (running, 0-turn) sessions.")
+    parser.add_argument("--yes", action="store_true", help="Skip confirmation.")
+    args = parser.parse_args(argv)
+
+    mgr = SessionManager()
+
+    if args.zombies:
+        sessions = mgr.list_sessions(status_filter="running")
+        to_delete = []
+        for s in sessions:
+            if s.turns_completed == 0:
+                transcript = mgr.get_transcript_path(s.id)
+                msg_count = 0
+                if transcript.exists():
+                    msg_count = len(TranscriptStore(transcript).read())
+                # Only delete if truly empty (just the topic message or less)
+                if msg_count <= 1:
+                    to_delete.append(s)
+
+        if not to_delete:
+            print("No zombie sessions to delete.")
+            return 0
+
+        print(f"Found {len(to_delete)} zombie sessions (running, 0 turns, empty):")
+        for s in to_delete:
+            print(f"  {s.id[:8]}  {s.topic[:60]}")
+
+        if not args.yes:
+            answer = input(f"\nDelete {len(to_delete)} sessions? [y/N] ")
+            if answer.lower() != "y":
+                print("Cancelled.")
+                return 0
+
+        for s in to_delete:
+            mgr.delete_session(s.id)
+            print(f"  deleted {s.id[:8]}")
+        print(f"Deleted {len(to_delete)} zombie sessions.")
+        return 0
+
+    if not args.session_id:
+        print("ERROR: Provide a session ID or use --zombies.", file=sys.stderr)
+        return 1
+
+    try:
+        meta = mgr.get_session(args.session_id)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    # Show what we're about to delete
+    print(f"Session:  {meta.id}")
+    print(f"Topic:    {meta.topic[:80]}")
+    print(f"Status:   {meta.status}")
+    print(f"Turns:    {meta.turns_completed}")
+
+    if meta.turns_completed > 0 and not args.yes:
+        answer = input(f"\nThis session has {meta.turns_completed} turns of content. Delete? [y/N] ")
+        if answer.lower() != "y":
+            print("Cancelled.")
+            return 0
+    elif not args.yes:
+        answer = input("\nDelete? [y/N] ")
+        if answer.lower() != "y":
+            print("Cancelled.")
+            return 0
+
+    mgr.delete_session(args.session_id)
+    print(f"Deleted.")
+    return 0
+
+
+def _cmd_cleanup(argv: list[str]) -> int:
+    """Mark dead 'running' sessions as crashed."""
+    from .session import SessionManager
+
+    parser = argparse.ArgumentParser(prog="relay cleanup", description="Mark dead sessions as crashed.")
+    parser.add_argument("--yes", action="store_true", help="Apply without confirmation.")
+    args = parser.parse_args(argv)
+
+    mgr = SessionManager()
+    running = mgr.list_sessions(status_filter="running")
+
+    if not running:
+        print("No running sessions found.")
+        return 0
+
+    # Check which are actually dead
+    dead = [s for s in running if not mgr.is_engine_alive(s.id)]
+    alive = [s for s in running if mgr.is_engine_alive(s.id)]
+
+    if alive:
+        print(f"  {len(alive)} session(s) still running (skipped):")
+        for s in alive:
+            print(f"    {s.id[:8]}  turns={s.turns_completed:3d}  {s.topic[:50]}")
+
+    if not dead:
+        print("No dead sessions to clean up.")
+        return 0
+
+    print(f"Found {len(dead)} dead sessions with status 'running':")
+    for s in dead:
+        print(f"  {s.id[:8]}  turns={s.turns_completed:3d}  {s.topic[:50]}")
+
+    if not args.yes:
+        answer = input(f"\nMark {len(dead)} as 'crashed'? [y/N] ")
+        if answer.lower() != "y":
+            print("Cancelled.")
+            return 0
+
+    for s in dead:
+        mgr.update_status(s.id, "crashed")
+        mgr.clear_pid(s.id)
+        print(f"  {s.id[:8]} → crashed")
+    print(f"Marked {len(dead)} sessions as crashed.")
     return 0
 
 
