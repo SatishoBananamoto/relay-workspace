@@ -43,8 +43,9 @@ def test_format_prompt_includes_instruction_and_messages():
     ]
     prompt = _format_prompt(agent, transcript, turn=2)
     assert "Be concise." in prompt
-    assert "[Satisho]: Discuss X." in prompt
+    assert "[Moderator — Satisho]: Discuss X." in prompt
     assert "[Claude]: I think X is..." in prompt
+    assert "relay discussion" in prompt  # relay context header
 
 
 def test_format_prompt_excludes_system_messages():
@@ -69,7 +70,7 @@ def test_format_continuation_sends_only_new_messages():
     cont = _format_continuation(transcript)
     assert "Turn 1 response" not in cont
     assert "Turn 2 response" not in cont
-    assert "[Satisho]: New input" in cont
+    assert "[Moderator — Satisho]: New input" in cont
 
 
 def test_format_continuation_with_no_agent_messages_sends_all():
@@ -77,7 +78,7 @@ def test_format_continuation_with_no_agent_messages_sends_all():
         _make_message(1, "moderator", "Satisho", "Topic"),
     ]
     cont = _format_continuation(transcript)
-    assert "[Satisho]: Topic" in cont
+    assert "[Moderator — Satisho]: Topic" in cont
 
 
 # ── CliClaudeProvider ─────────────────────────────────────────────────────────

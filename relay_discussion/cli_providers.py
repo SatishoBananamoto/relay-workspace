@@ -25,8 +25,24 @@ def _format_prompt(
 ) -> str:
     """Build a prompt string from the agent config and recent transcript."""
     parts: list[str] = []
+
+    # Find the other agent's name from transcript
+    other_agents = set()
+    for msg in transcript:
+        if msg.role == "agent" and msg.author != agent.name:
+            other_agents.add(msg.author)
+
+    # Relay context — tell the agent what this is
+    other_name = next(iter(other_agents), "the other agent")
+    parts.append(
+        f"You are {agent.name} in a relay discussion with {other_name}. "
+        f"The moderator (Satisho) sets the topic and may interject. "
+        f"Respond directly to {other_name}, not to the moderator. "
+        f"The moderator's messages are context and guidance, not questions for you to answer."
+    )
+
     if agent.instruction:
-        parts.append(agent.instruction)
+        parts.append(f"Your role: {agent.instruction}")
 
     if workspace_summary:
         parts.append(workspace_summary)
@@ -35,7 +51,10 @@ def _format_prompt(
     for msg in transcript:
         if msg.role == "system":
             continue
-        parts.append(f"[{msg.author}]: {msg.content}")
+        if msg.role == "moderator":
+            parts.append(f"[Moderator — {msg.author}]: {msg.content}")
+        else:
+            parts.append(f"[{msg.author}]: {msg.content}")
 
     return "\n\n".join(parts)
 
@@ -53,10 +72,15 @@ def _format_continuation(transcript: Sequence[Message]) -> str:
         if msg.role == "agent":
             last_agent_idx = i
 
+    def _fmt(msg):
+        if msg.role == "moderator":
+            return f"[Moderator — {msg.author}]: {msg.content}"
+        return f"[{msg.author}]: {msg.content}"
+
     if last_agent_idx < 0:
         # No agent messages yet — send the full prompt
         return "\n\n".join(
-            f"[{msg.author}]: {msg.content}"
+            _fmt(msg)
             for msg in transcript
             if msg.role != "system"
         )
@@ -67,7 +91,7 @@ def _format_continuation(transcript: Sequence[Message]) -> str:
         return ""
 
     return "\n\n".join(
-        f"[{msg.author}]: {msg.content}"
+        _fmt(msg)
         for msg in new_messages
         if msg.role != "system"
     )
