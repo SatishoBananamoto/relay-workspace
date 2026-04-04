@@ -423,7 +423,7 @@ def cli_entry(argv: list[str] | None = None) -> int:
 
 def _build_new_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="relay new", description="Start a new relay session.")
-    parser.add_argument("--topic", required=True, help="Discussion topic.")
+    parser.add_argument("--topic", help="Discussion topic. Required unless --web (set in browser).")
     parser.add_argument("--name", help="Human-readable session name (e.g. 'API design debate').")
     parser.add_argument("--turns", type=int, default=None, help="Max turns (default from config).")
     parser.add_argument("--no-limit", action="store_true", help="No turn limit.")
@@ -448,6 +448,8 @@ def _build_new_parser() -> argparse.ArgumentParser:
 
 def _apply_config_overrides(config: RelayConfig, overrides: dict) -> None:
     """Apply lobby settings to the relay config before engine starts."""
+    if "topic" in overrides and overrides["topic"]:
+        config.topic = overrides["topic"]
     if "turns" in overrides:
         config.turns = int(overrides["turns"])
     if "left_instruction" in overrides:
@@ -470,6 +472,12 @@ def _cmd_new(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     cfg = load_config()
 
+    # Topic is optional with --web (configured in browser)
+    topic = args.topic or ""
+    if not topic and not args.web:
+        print("ERROR: --topic is required (or use --web to configure in browser).", file=sys.stderr)
+        return 1
+
     left_name = args.left_name or cfg.left_name
     right_name = args.right_name or cfg.right_name
     left_provider = args.left_provider or cfg.left_provider
@@ -481,7 +489,7 @@ def _cmd_new(argv: list[str]) -> int:
 
     mgr = SessionManager()
     meta = mgr.create_session(
-        topic=args.topic,
+        topic=topic,
         left_agent_name=left_name,
         right_agent_name=right_name,
         moderator=moderator,
@@ -551,7 +559,7 @@ def _cmd_new(argv: list[str]) -> int:
                 runner_factory=runner_factory,
                 moderator_queue=mq,
                 session_id=meta.id,
-                topic=args.topic,
+                topic=topic,
             )
         except ValueError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
@@ -585,7 +593,7 @@ def _cmd_new(argv: list[str]) -> int:
                 runner_factory=runner_factory,
                 moderator_queue=mq,
                 session_id=meta.id,
-                topic=args.topic,
+                topic=topic,
                 port=args.port,
                 agents=[
                     {"name": config.left_agent.name, "provider": config.left_agent.provider, "model": config.left_agent.model},

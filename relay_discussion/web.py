@@ -695,6 +695,21 @@ _INDEX_HTML = """<!DOCTYPE html>
   .tool-line .tool-name { color: #bc8cff; font-weight: 600; }
   .tool-line .tool-input { color: #484f58; }
 
+  /* Mode buttons */
+  .mode-btn {
+    padding: 6px 14px;
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    background: #21262d;
+    color: #8b949e;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .mode-btn:hover { border-color: #58a6ff; color: #c9d1d9; }
+  .mode-btn.active { background: #1f6feb33; border-color: #58a6ff; color: #58a6ff; font-weight: 600; }
+
   /* Tabs */
   .tab-btn {
     flex: 1;
@@ -789,75 +804,103 @@ _INDEX_HTML = """<!DOCTYPE html>
   <span id="s-agent">---</span>
 </div>
 
-<!-- Lobby overlay -->
-<div id="lobby" style="position:fixed;inset:0;background:#0d1117ee;z-index:200;display:flex;align-items:center;justify-content:center">
-  <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:24px;width:520px;max-width:90vw">
-    <h2 style="color:#c9d1d9;font-size:16px;margin-bottom:16px">Session Settings</h2>
-    <div style="margin-bottom:12px">
-      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Topic</label>
-      <div id="lobby-topic" style="font-size:13px;color:#c9d1d9;padding:8px;background:#0d1117;border-radius:4px;border:1px solid #30363d;max-height:60px;overflow:auto"></div>
+<!-- Lobby overlay — full session config -->
+<div id="lobby" style="position:fixed;inset:0;background:#0d1117;z-index:200;display:flex;align-items:center;justify-content:center;overflow-y:auto;padding:20px">
+  <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:28px;width:600px;max-width:95vw">
+    <h2 style="color:#c9d1d9;font-size:18px;margin-bottom:20px;display:flex;align-items:center;justify-content:space-between">
+      New Relay Session
+      <span style="font-size:12px;color:#484f58">
+        Auto-start: <span id="lobby-countdown" style="color:#58a6ff;font-weight:600">30</span>s
+        <button onclick="lobbyCancelAuto()" style="background:none;border:1px solid #30363d;border-radius:3px;color:#8b949e;font-size:11px;padding:2px 6px;cursor:pointer;margin-left:4px">Cancel</button>
+      </span>
+    </h2>
+
+    <!-- Topic -->
+    <div style="margin-bottom:16px">
+      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Topic / Prompt</label>
+      <textarea id="lobby-topic" rows="3" placeholder="What should the agents discuss or work on?" style="width:100%;padding:8px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:13px;font-family:inherit;resize:vertical"></textarea>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
-      <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Turns</label>
-        <input type="number" id="lobby-turns" value="4" min="1" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:13px;font-family:inherit">
+
+    <!-- Mode -->
+    <div style="margin-bottom:16px">
+      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:6px">Mode</label>
+      <div style="display:flex;gap:6px;flex-wrap:wrap" id="mode-buttons">
+        <button class="mode-btn active" data-mode="discuss" onclick="selectMode('discuss')">Discuss</button>
+        <button class="mode-btn" data-mode="debate" onclick="selectMode('debate')">Debate</button>
+        <button class="mode-btn" data-mode="build" onclick="selectMode('build')">Build</button>
+        <button class="mode-btn" data-mode="interview" onclick="selectMode('interview')">Interview</button>
+        <button class="mode-btn" data-mode="freeform" onclick="selectMode('freeform')">Freeform</button>
       </div>
-      <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-left-label">Agent 1 Model</label>
-        <select id="lobby-left-model" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="opus" selected>opus</option>
-          <option value="sonnet">sonnet</option>
-          <option value="haiku">haiku</option>
-        </select>
-      </div>
-      <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-right-label">Agent 2 Model</label>
-        <select id="lobby-right-model" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="opus">opus</option>
-          <option value="sonnet" selected>sonnet</option>
-          <option value="haiku">haiku</option>
-        </select>
-      </div>
+      <div id="mode-description" style="font-size:11px;color:#484f58;margin-top:6px">Agents discuss the topic directly with each other. You observe and interject.</div>
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:12px">
-      <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px">Auto-start</label>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span id="lobby-countdown" style="font-size:24px;color:#58a6ff;font-weight:600">30</span>
-          <span style="font-size:12px;color:#8b949e">sec</span>
+
+    <!-- Agents row -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+      <!-- Left agent -->
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px">
+        <div style="font-size:12px;color:#58a6ff;font-weight:600;margin-bottom:8px" id="lobby-left-header">Agent 1</div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:10px;color:#8b949e;text-transform:uppercase" id="lobby-left-label">Model</label>
+          <select id="lobby-left-model" style="width:100%;padding:5px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit;margin-top:2px">
+            <option value="opus" selected>opus</option>
+            <option value="sonnet">sonnet</option>
+            <option value="haiku">haiku</option>
+          </select>
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:10px;color:#8b949e;text-transform:uppercase" id="lobby-left-effort-label">Effort</label>
+          <select id="lobby-left-effort" style="width:100%;padding:5px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit;margin-top:2px">
+            <option value="max" selected>max</option>
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:10px;color:#8b949e;text-transform:uppercase" id="lobby-left-instr-label">Instruction</label>
+          <input type="text" id="lobby-left-instr" placeholder="Auto-set by mode" style="width:100%;padding:5px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;font-family:inherit;margin-top:2px">
         </div>
       </div>
-      <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-left-effort-label">Agent 1 Effort</label>
-        <select id="lobby-left-effort" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="max" selected>max</option>
-          <option value="high">high</option>
-          <option value="medium">medium</option>
-          <option value="low">low</option>
-        </select>
+      <!-- Right agent -->
+      <div style="background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px">
+        <div style="font-size:12px;color:#3fb950;font-weight:600;margin-bottom:8px" id="lobby-right-header">Agent 2</div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:10px;color:#8b949e;text-transform:uppercase" id="lobby-right-label">Model</label>
+          <select id="lobby-right-model" style="width:100%;padding:5px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit;margin-top:2px">
+            <option value="opus">opus</option>
+            <option value="sonnet" selected>sonnet</option>
+            <option value="haiku">haiku</option>
+          </select>
+        </div>
+        <div style="margin-bottom:8px">
+          <label style="font-size:10px;color:#8b949e;text-transform:uppercase" id="lobby-right-effort-label">Effort</label>
+          <select id="lobby-right-effort" style="width:100%;padding:5px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit;margin-top:2px">
+            <option value="max" selected>max</option>
+            <option value="high">high</option>
+            <option value="medium">medium</option>
+            <option value="low">low</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:10px;color:#8b949e;text-transform:uppercase" id="lobby-right-instr-label">Instruction</label>
+          <input type="text" id="lobby-right-instr" placeholder="Auto-set by mode" style="width:100%;padding:5px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;font-family:inherit;margin-top:2px">
+        </div>
       </div>
+    </div>
+
+    <!-- Turns -->
+    <div style="display:flex;gap:16px;align-items:center;margin-bottom:20px">
       <div>
-        <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-right-effort-label">Agent 2 Effort</label>
-        <select id="lobby-right-effort" style="width:100%;padding:6px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-          <option value="max" selected>max</option>
-          <option value="high">high</option>
-          <option value="medium">medium</option>
-          <option value="low">low</option>
-        </select>
+        <label style="font-size:10px;color:#8b949e;text-transform:uppercase">Turns</label>
+        <input type="number" id="lobby-turns" value="10" min="1" style="width:80px;padding:5px 8px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:13px;font-family:inherit;margin-top:2px">
       </div>
+      <label style="font-size:12px;color:#8b949e;display:flex;align-items:center;gap:6px;margin-top:14px">
+        <input type="checkbox" id="lobby-no-limit"> No limit
+      </label>
     </div>
-    <div style="margin-bottom:12px">
-      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-left-instr-label">Agent 1 instruction</label>
-      <input type="text" id="lobby-left-instr" placeholder="(optional)" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-    </div>
-    <div style="margin-bottom:16px">
-      <label style="font-size:11px;color:#8b949e;text-transform:uppercase;display:block;margin-bottom:4px" id="lobby-right-instr-label">Agent 2 instruction</label>
-      <input type="text" id="lobby-right-instr" placeholder="(optional)" style="width:100%;padding:6px 10px;background:#0d1117;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
-    </div>
-    <div style="display:flex;gap:8px">
-      <button onclick="lobbyStart()" style="flex:1;padding:10px;background:#1f6feb;border:none;border-radius:4px;color:#fff;font-size:14px;font-weight:600;font-family:inherit;cursor:pointer">Start Now</button>
-      <button onclick="lobbyCancelAuto()" style="padding:10px 16px;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit;cursor:pointer">Cancel Auto</button>
-    </div>
+
+    <!-- Start -->
+    <button onclick="lobbyStart()" style="width:100%;padding:12px;background:#1f6feb;border:none;border-radius:6px;color:#fff;font-size:15px;font-weight:600;font-family:inherit;cursor:pointer;letter-spacing:0.3px">Start Session</button>
   </div>
 </div>
 
@@ -1465,7 +1508,7 @@ fetch('/state').then(r => r.json()).then(data => {
   document.getElementById('s-session').textContent = data.session_id || '---';
   updateStatus(data);
   // Populate lobby
-  document.getElementById('lobby-topic').textContent = data.topic || '';
+  if (data.topic) document.getElementById('lobby-topic').value = data.topic;
   if (data.status !== 'lobby') {
     document.getElementById('lobby').style.display = 'none';
   }
@@ -1483,9 +1526,11 @@ fetch('/state').then(r => r.json()).then(data => {
       const eSel = document.getElementById('lobby-' + side + '-effort');
 
       const iLabel = document.getElementById('lobby-' + side + '-instr-label');
-      if (label) label.textContent = agent.name + ' Model';
-      if (eLabel) eLabel.textContent = agent.name + ' Effort';
-      if (iLabel) iLabel.textContent = agent.name + ' Instruction';
+      const header = document.getElementById('lobby-' + side + '-header');
+      if (header) header.textContent = agent.name;
+      if (label) label.textContent = 'Model';
+      if (eLabel) eLabel.textContent = 'Effort';
+      if (iLabel) iLabel.textContent = 'Instruction';
 
       if (agent.provider === 'cli-claude') {
         mSel.innerHTML = CLAUDE_MODELS.map(m => '<option value="' + m + '">' + m + '</option>').join('');
@@ -1506,8 +1551,56 @@ fetch('/state').then(r => r.json()).then(data => {
     }
     if (data.agents[0]) setupLobbyAgent(data.agents[0], 'left');
     if (data.agents[1]) setupLobbyAgent(data.agents[1], 'right');
+    // Trigger mode selection to populate instructions with agent names
+    selectMode(selectedMode);
   }
 });
+
+// --- Mode definitions ---
+const MODES = {
+  discuss: {
+    desc: 'Agents discuss the topic directly with each other. You observe and interject.',
+    left: 'You are in a discussion with {other}. Discuss the topic directly with them. The moderator (Satisho) may interject with guidance. Respond to {other}, not to the moderator.',
+    right: 'You are in a discussion with {other}. Discuss the topic directly with them. The moderator (Satisho) may interject with guidance. Respond to {other}, not to the moderator.',
+  },
+  debate: {
+    desc: 'Agents take opposing positions and challenge each other. You moderate.',
+    left: 'You are debating {other} on this topic. Challenge their claims, find weaknesses in their reasoning, and defend your position. Be rigorous but intellectually honest. Address {other} directly.',
+    right: 'You are debating {other} on this topic. Challenge their claims, find weaknesses in their reasoning, and defend your position. Be rigorous but intellectually honest. Address {other} directly.',
+  },
+  build: {
+    desc: 'One agent builds (code, specs, plans), the other reviews. They alternate.',
+    left: 'You are the builder. Produce concrete artifacts — code, specs, designs, plans. After {other} reviews your work, iterate based on their feedback. Be specific and actionable.',
+    right: 'You are the reviewer. Critically evaluate what {other} produces. Find bugs, edge cases, missing requirements, architectural issues. Be thorough and constructive. Suggest specific fixes.',
+  },
+  interview: {
+    desc: 'One agent asks probing questions, the other answers with depth.',
+    left: 'You are interviewing {other} about this topic. Ask probing, insightful questions that reveal deeper understanding. Follow up on vague or incomplete answers. Do not answer yourself.',
+    right: 'You are being interviewed by {other}. Answer their questions with depth and specificity. Use concrete examples. If you are uncertain, say so and reason through it.',
+  },
+  freeform: {
+    desc: 'No special instructions. Both agents respond to the topic and each other freely (default behavior).',
+    left: '',
+    right: '',
+  },
+};
+let selectedMode = 'discuss';
+
+function selectMode(mode) {
+  selectedMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  document.getElementById('mode-description').textContent = MODES[mode].desc;
+  // Auto-fill instructions (user can override)
+  const agents = agentInfos;
+  const leftName = agents[0] ? agents[0].name : 'Agent 1';
+  const rightName = agents[1] ? agents[1].name : 'Agent 2';
+  document.getElementById('lobby-left-instr').value = MODES[mode].left.replace(/{other}/g, rightName);
+  document.getElementById('lobby-right-instr').value = MODES[mode].right.replace(/{other}/g, leftName);
+  document.getElementById('lobby-left-instr').placeholder = MODES[mode].left ? '' : '(none — freeform)';
+  document.getElementById('lobby-right-instr').placeholder = MODES[mode].right ? '' : '(none — freeform)';
+}
 
 // --- Lobby ---
 let lobbyTimer = null;
@@ -1533,10 +1626,20 @@ function lobbyCancelAuto() {
 
 async function lobbyStart() {
   if (lobbyTimer) { clearInterval(lobbyTimer); lobbyTimer = null; }
+
+  const topic = document.getElementById('lobby-topic').value.trim();
+  if (!topic) {
+    document.getElementById('lobby-topic').style.borderColor = '#f85149';
+    document.getElementById('lobby-topic').focus();
+    return;
+  }
+
   document.getElementById('lobby').style.display = 'none';
-  const overrides = {};
+  const overrides = {topic};
   const turns = document.getElementById('lobby-turns').value;
-  if (turns) overrides.turns = parseInt(turns);
+  const noLimit = document.getElementById('lobby-no-limit').checked;
+  overrides.turns = noLimit ? 999999 : (parseInt(turns) || 10);
+  overrides.mode = selectedMode;
   const leftInstr = document.getElementById('lobby-left-instr').value.trim();
   if (leftInstr) overrides.left_instruction = leftInstr;
   const rightInstr = document.getElementById('lobby-right-instr').value.trim();
