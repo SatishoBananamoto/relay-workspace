@@ -111,6 +111,7 @@ class WebViewer:
         self._current_turn = 0
         self._current_agent = "---"
         self._streaming = False
+        self._mode = "discuss"
         self._server: ThreadingHTTPServer | None = None
         self._start_event = threading.Event()
         self._config_overrides: dict = {}  # settings changed in lobby
@@ -179,6 +180,8 @@ class WebViewer:
         if kind == "thinking":
             self._current_agent = activity.get("agent", self._current_agent)
             self._current_turn = activity.get("turn", self._current_turn)
+            if activity.get("mode"):
+                self._mode = activity["mode"]
             self._bus.publish({
                 "type": "status",
                 "data": self._status_dict(),
@@ -205,6 +208,7 @@ class WebViewer:
             "status": self._status,
             "turn": self._current_turn,
             "agent": self._current_agent,
+            "mode": self._mode,
         }
 
     def wait_for_start(self) -> dict:
@@ -216,6 +220,8 @@ class WebViewer:
         """Called from POST /start — unblocks the engine thread."""
         if overrides:
             self._config_overrides = overrides
+            if overrides.get("mode"):
+                self._mode = overrides["mode"]
         self._start_event.set()
         self._bus.publish({"type": "status", "data": {"status": "starting"}})
 
@@ -231,6 +237,8 @@ class WebViewer:
                     self._serve_sse()
                 elif self.path == "/state":
                     self._serve_state()
+                elif self.path == "/modes":
+                    self._serve_modes()
                 else:
                     self.send_error(404)
 
@@ -252,6 +260,26 @@ class WebViewer:
 
             def _serve_state(self):
                 body = json.dumps(viewer.get_state()).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _serve_modes(self):
+                from .modes import MODES
+                modes_data = {
+                    name: {
+                        "description": spec.description,
+                        "left_role": spec.left_role,
+                        "right_role": spec.right_role,
+                        "left_instruction": spec.left_instruction_template,
+                        "right_instruction": spec.right_instruction_template,
+                        "workspace_required": spec.workspace_required,
+                    }
+                    for name, spec in MODES.items()
+                }
+                body = json.dumps(modes_data).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(body)))
@@ -802,6 +830,8 @@ _INDEX_HTML = """<!DOCTYPE html>
   <span id="s-turn">0</span>
   <span class="label">Agent</span>
   <span id="s-agent">---</span>
+  <span class="label">Mode</span>
+  <span id="s-mode" style="color:#bc8cff">---</span>
 </div>
 
 <!-- Lobby overlay — full session config -->
@@ -1184,6 +1214,7 @@ function handleToolEvent(data) {
 function updateStatus(data) {
   document.getElementById('s-turn').textContent = data.turn || 0;
   document.getElementById('s-agent').textContent = data.agent || '---';
+  if (data.mode) document.getElementById('s-mode').textContent = data.mode;
   const badge = document.getElementById('s-badge');
   badge.textContent = (data.status || 'starting').toUpperCase();
   badge.className = 'status-badge status-' + (data.status || 'starting');
@@ -1545,55 +1576,50 @@ fetch('/state').then(r => r.json()).then(data => {
     }
     if (data.agents[0]) setupLobbyAgent(data.agents[0], 'left');
     if (data.agents[1]) setupLobbyAgent(data.agents[1], 'right');
-    // Trigger mode selection to populate instructions with agent names
-    selectMode(selectedMode);
+    // Load modes from server then select default
+    loadModes();
   }
 });
 
-// --- Mode definitions ---
-const MODES = {
-  discuss: {
-    desc: 'Agents discuss the topic directly with each other. You observe and interject.',
-    left: 'You are in a discussion with {other}. Discuss the topic directly with them. The moderator (Satisho) may interject with guidance. Respond to {other}, not to the moderator.',
-    right: 'You are in a discussion with {other}. Discuss the topic directly with them. The moderator (Satisho) may interject with guidance. Respond to {other}, not to the moderator.',
-  },
-  debate: {
-    desc: 'Agents take opposing positions and challenge each other. You moderate.',
-    left: 'You are debating {other} on this topic. Challenge their claims, find weaknesses in their reasoning, and defend your position. Be rigorous but intellectually honest. Address {other} directly.',
-    right: 'You are debating {other} on this topic. Challenge their claims, find weaknesses in their reasoning, and defend your position. Be rigorous but intellectually honest. Address {other} directly.',
-  },
-  build: {
-    desc: 'One agent builds (code, specs, plans), the other reviews. They alternate.',
-    left: 'You are the builder. Produce concrete artifacts — code, specs, designs, plans. After {other} reviews your work, iterate based on their feedback. Be specific and actionable.',
-    right: 'You are the reviewer. Critically evaluate what {other} produces. Find bugs, edge cases, missing requirements, architectural issues. Be thorough and constructive. Suggest specific fixes.',
-  },
-  interview: {
-    desc: 'One agent asks probing questions, the other answers with depth.',
-    left: 'You are interviewing {other} about this topic. Ask probing, insightful questions that reveal deeper understanding. Follow up on vague or incomplete answers. Do not answer yourself.',
-    right: 'You are being interviewed by {other}. Answer their questions with depth and specificity. Use concrete examples. If you are uncertain, say so and reason through it.',
-  },
-  freeform: {
-    desc: 'No special instructions. Both agents respond to the topic and each other freely (default behavior).',
-    left: '',
-    right: '',
-  },
-};
+// --- Mode definitions (fetched from server) ---
+let MODES = {};
 let selectedMode = 'discuss';
+
+async function loadModes() {
+  try {
+    const resp = await fetch('/modes');
+    MODES = await resp.json();
+    // Build mode buttons dynamically
+    const container = document.getElementById('mode-buttons');
+    container.innerHTML = '';
+    for (const [name, spec] of Object.entries(MODES)) {
+      const btn = document.createElement('button');
+      btn.className = 'mode-btn' + (name === selectedMode ? ' active' : '');
+      btn.dataset.mode = name;
+      btn.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+      btn.onclick = () => selectMode(name);
+      container.appendChild(btn);
+    }
+    selectMode(selectedMode);
+  } catch (e) {
+    console.error('Failed to load modes:', e);
+  }
+}
 
 function selectMode(mode) {
   selectedMode = mode;
+  const spec = MODES[mode];
+  if (!spec) return;
   document.querySelectorAll('.mode-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.mode === mode);
   });
-  document.getElementById('mode-description').textContent = MODES[mode].desc;
-  // Auto-fill instructions (user can override)
-  const agents = agentInfos;
-  const leftName = agents[0] ? agents[0].name : 'Agent 1';
-  const rightName = agents[1] ? agents[1].name : 'Agent 2';
-  document.getElementById('lobby-left-instr').value = MODES[mode].left.replace(/{other}/g, rightName);
-  document.getElementById('lobby-right-instr').value = MODES[mode].right.replace(/{other}/g, leftName);
-  document.getElementById('lobby-left-instr').placeholder = MODES[mode].left ? '' : '(none — freeform)';
-  document.getElementById('lobby-right-instr').placeholder = MODES[mode].right ? '' : '(none — freeform)';
+  document.getElementById('mode-description').textContent = spec.description || '';
+  const leftName = agentInfos[0] ? agentInfos[0].name : 'Agent 1';
+  const rightName = agentInfos[1] ? agentInfos[1].name : 'Agent 2';
+  document.getElementById('lobby-left-instr').value = (spec.left_instruction || '').replace(/{other}/g, rightName);
+  document.getElementById('lobby-right-instr').value = (spec.right_instruction || '').replace(/{other}/g, leftName);
+  document.getElementById('lobby-left-instr').placeholder = spec.left_instruction ? '' : '(none — freeform)';
+  document.getElementById('lobby-right-instr').placeholder = spec.right_instruction ? '' : '(none — freeform)';
 }
 
 // --- Lobby ---

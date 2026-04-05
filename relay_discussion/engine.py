@@ -65,6 +65,8 @@ class RelayRunner:
             id(config.right_agent): list(config.right_agent.fault_script),
         }
         self._policy = RelayPolicyHarness(use_harness=config.use_harness)
+        from .modes import get_mode
+        self._mode_spec = get_mode(config.mode)
 
     def _get_provider(self, agent: AgentConfig) -> BaseProvider:
         """Return a cached provider for the given agent."""
@@ -211,9 +213,9 @@ class RelayRunner:
                 self._observer.on_turn_start(turn, agent.name)
 
             self._tool_call_count = 0  # reset per turn
-            # Emit current model/effort config for this agent
             _side = "left" if agent is self.config.left_agent else "right"
             _prov = self._providers.get(_side)
+            _role = self._mode_spec.left_role if agent is self.config.left_agent else self._mode_spec.right_role
             self._emit_activity({
                 "kind": "thinking",
                 "agent": agent.name,
@@ -221,6 +223,8 @@ class RelayRunner:
                 "provider": agent.provider,
                 "model": getattr(_prov, "_model", None) or agent.model if _prov else agent.model,
                 "effort": getattr(_prov, "_effort", None) or "",
+                "mode": self._mode_spec.name,
+                "role": _role,
             })
 
             response, failure_type, failure_reason = self._attempt_with_retry(
@@ -881,6 +885,7 @@ class RelayRunner:
     def _session_snapshot(self) -> dict[str, object]:
         return {
             "moderator": self.config.moderator,
+            "mode": self._mode_spec.name,
             "moderator_events": [
                 {"turn": event.turn, "content": event.content, "author": event.author}
                 for event in self.config.moderator_events

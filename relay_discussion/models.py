@@ -176,6 +176,7 @@ class RelayConfig:
         ]
     )
     use_harness: bool = False
+    mode: str = "discuss"
 
 
 @dataclass(slots=True)

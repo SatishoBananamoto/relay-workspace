@@ -24,13 +24,30 @@ def test_session_meta_round_trips():
         status="new",
         created="2026-04-01T00:00:00Z",
         updated="2026-04-01T00:00:00Z",
-        build_mode=True,
+        mode="build",
     )
     data = meta.to_dict()
     restored = SessionMeta.from_dict(data)
     assert restored.id == "abc-123"
     assert restored.topic == "Test topic"
-    assert restored.build_mode is True
+    assert restored.mode == "build"
+
+
+def test_session_meta_backward_compat_build_mode():
+    """Old sessions with build_mode=True should migrate to mode='build'."""
+    old_data = {
+        "id": "old-123",
+        "topic": "Old session",
+        "left_agent_name": "Claude",
+        "right_agent_name": "Codex",
+        "moderator": "Satisho",
+        "status": "completed",
+        "created": "2026-01-01T00:00:00Z",
+        "updated": "2026-01-01T00:00:00Z",
+        "build_mode": True,
+    }
+    restored = SessionMeta.from_dict(old_data)
+    assert restored.mode == "build"
 
 
 def test_session_meta_from_dict_ignores_unknown_fields():
@@ -88,7 +105,7 @@ def test_create_session_build_mode_creates_workspace(mgr: SessionManager):
         topic="Build test",
         left_agent_name="Claude",
         right_agent_name="Codex",
-        build_mode=True,
+        mode="build",
     )
     ws = mgr.get_workspace_path(meta.id)
     assert (ws / "shared").is_dir()

@@ -427,7 +427,9 @@ def _build_new_parser() -> argparse.ArgumentParser:
     parser.add_argument("--name", help="Human-readable session name (e.g. 'API design debate').")
     parser.add_argument("--turns", type=int, default=None, help="Max turns (default from config).")
     parser.add_argument("--no-limit", action="store_true", help="No turn limit.")
-    parser.add_argument("--build", action="store_true", help="Enable build mode with shared workspace.")
+    parser.add_argument("--mode", choices=["discuss", "debate", "build", "interview", "freeform"],
+                        default="discuss", help="Session mode (default: discuss).")
+    parser.add_argument("--build", action="store_true", help="Alias for --mode build.")
     parser.add_argument("--tui", action="store_true", help="Launch split-pane terminal UI.")
     parser.add_argument("--web", action="store_true", help="Launch web viewer in browser.")
     parser.add_argument("--port", type=int, default=8411, help="Web viewer port (default: 8411).")
@@ -452,6 +454,20 @@ def _apply_config_overrides(config: RelayConfig, overrides: dict) -> None:
         config.topic = overrides["topic"]
     if "turns" in overrides:
         config.turns = int(overrides["turns"])
+    if "mode" in overrides:
+        config.mode = overrides["mode"]
+    # Apply mode instruction templates as defaults (user overrides take priority)
+    if "mode" in overrides:
+        from .modes import get_mode
+        mode_spec = get_mode(overrides["mode"])
+        if "left_instruction" not in overrides and mode_spec.left_instruction_template:
+            config.left_agent.instruction = mode_spec.left_instruction_template.replace(
+                "{other}", config.right_agent.name,
+            )
+        if "right_instruction" not in overrides and mode_spec.right_instruction_template:
+            config.right_agent.instruction = mode_spec.right_instruction_template.replace(
+                "{other}", config.left_agent.name,
+            )
     if "left_instruction" in overrides:
         config.left_agent.instruction = overrides["left_instruction"]
     if "right_instruction" in overrides:
@@ -460,8 +476,6 @@ def _apply_config_overrides(config: RelayConfig, overrides: dict) -> None:
         config.left_agent.model = overrides["left_model"]
     if "right_model" in overrides:
         config.right_agent.model = overrides["right_model"]
-    # Effort is stored on the provider, not the config — pass through as-is
-    # The engine will apply these after providers are created
 
 
 def _cmd_new(argv: list[str]) -> int:
@@ -477,6 +491,11 @@ def _cmd_new(argv: list[str]) -> int:
     if not topic and not args.web:
         print("ERROR: --topic is required (or use --web to configure in browser).", file=sys.stderr)
         return 1
+
+    # --build is alias for --mode build
+    mode = args.mode
+    if args.build and mode == "discuss":
+        mode = "build"
 
     left_name = args.left_name or cfg.left_name
     right_name = args.right_name or cfg.right_name
@@ -494,7 +513,7 @@ def _cmd_new(argv: list[str]) -> int:
         right_agent_name=right_name,
         moderator=moderator,
         name=args.name or "",
-        build_mode=args.build,
+        mode=mode,
         left_provider=left_provider,
         right_provider=right_provider,
         left_model=left_model,
@@ -527,7 +546,8 @@ def _cmd_new(argv: list[str]) -> int:
     )
 
     transcript_path = mgr.get_transcript_path(meta.id)
-    ws_path = mgr.get_workspace_path(meta.id) if args.build else None
+    from .modes import get_mode
+    ws_path = mgr.get_workspace_path(meta.id) if get_mode(mode).workspace_required else None
     mgr.update_status(meta.id, "running")
     mgr.write_pid(meta.id)
 
@@ -657,7 +677,9 @@ def _cmd_resume(argv: list[str]) -> int:
     parser.add_argument("session_id", nargs="?", help="Session ID or name (default: most recent paused).")
     parser.add_argument("--turns", type=int, help="Override max turns.")
     parser.add_argument("--no-limit", action="store_true", help="No turn limit.")
-    parser.add_argument("--build", action="store_true", help="Enable build mode (if not already).")
+    parser.add_argument("--mode", choices=["discuss", "debate", "build", "interview", "freeform"],
+                        help="Override session mode.")
+    parser.add_argument("--build", action="store_true", help="Alias for --mode build.")
     parser.add_argument("--tui", action="store_true", help="Launch split-pane terminal UI.")
     parser.add_argument("--web", action="store_true", help="Launch web viewer in browser.")
     parser.add_argument("--port", type=int, default=8411, help="Web viewer port (default: 8411).")
@@ -721,8 +743,15 @@ def _cmd_resume(argv: list[str]) -> int:
     )
 
     # Handle --build upgrade on resume
+    # Determine mode: CLI override > session metadata > default
+    from .modes import get_mode
+    resume_mode = args.mode or getattr(meta, "mode", "freeform")
+    if args.build and not args.mode:
+        resume_mode = "build"
+    mode_spec = get_mode(resume_mode)
+
     workspace_path = None
-    if args.build:
+    if mode_spec.workspace_required:
         ws = mgr.get_workspace_path(session_id)
         if not ws.exists():
             from .workspace import WorkspaceManager

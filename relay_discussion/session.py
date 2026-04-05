@@ -31,7 +31,7 @@ class SessionMeta:
     updated: str
     turns_completed: int = 0
     name: str = ""
-    build_mode: bool = False
+    mode: str = "freeform"
     left_provider: str = "mock"
     right_provider: str = "mock"
     left_model: str = "mirror"
@@ -44,6 +44,9 @@ class SessionMeta:
     def from_dict(cls, data: dict[str, Any]) -> SessionMeta:
         known_fields = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in data.items() if k in known_fields}
+        # Backward compat: old sessions have build_mode but no mode
+        if "mode" not in filtered and data.get("build_mode"):
+            filtered["mode"] = "build"
         return cls(**filtered)
 
 
@@ -71,7 +74,7 @@ class SessionManager:
         right_agent_name: str,
         moderator: str = "Satisho",
         name: str = "",
-        build_mode: bool = False,
+        mode: str = "freeform",
         left_provider: str = "mock",
         right_provider: str = "mock",
         left_model: str = "mirror",
@@ -91,7 +94,7 @@ class SessionManager:
             created=now,
             updated=now,
             name=name,
-            build_mode=build_mode,
+            mode=mode,
             left_provider=left_provider,
             right_provider=right_provider,
             left_model=left_model,
@@ -101,7 +104,9 @@ class SessionManager:
         session_dir = self._sessions_dir / session_id
         session_dir.mkdir(parents=True)
 
-        if build_mode:
+        from .modes import get_mode
+        mode_spec = get_mode(mode)
+        if mode_spec.workspace_required:
             ws = session_dir / "workspace"
             ws.mkdir()
             (ws / "shared").mkdir()
