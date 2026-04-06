@@ -394,7 +394,7 @@ def _parse_fault_script(raw: str) -> list[str]:
 
 # ── Subcommand handlers (relay new / resume / list / archive / say) ───────────
 
-SUBCOMMANDS = {"new", "resume", "list", "archive", "delete", "cleanup", "say"}
+SUBCOMMANDS = {"new", "resume", "list", "archive", "delete", "cleanup", "export", "say"}
 
 
 def cli_entry(argv: list[str] | None = None) -> int:
@@ -415,6 +415,8 @@ def cli_entry(argv: list[str] | None = None) -> int:
             return _cmd_delete(rest)
         if cmd == "cleanup":
             return _cmd_cleanup(rest)
+        if cmd == "export":
+            return _cmd_export(rest)
         if cmd == "say":
             return _cmd_say(rest)
     # Legacy mode: no subcommand, use original argument parser
@@ -925,6 +927,137 @@ def _cmd_archive(argv: list[str]) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _cmd_export(argv: list[str]) -> int:
+    """Export a session transcript as Markdown."""
+    from .session import SessionManager
+    from .transcript import TranscriptStore
+
+    parser = argparse.ArgumentParser(prog="relay export", description="Export session as Markdown.")
+    parser.add_argument("session_id", nargs="?", help="Session ID or name (default: most recent completed).")
+    parser.add_argument("-o", "--output", help="Output file path (default: stdout).")
+    args = parser.parse_args(argv)
+
+    mgr = SessionManager()
+
+    if args.session_id:
+        by_name = mgr.get_session_by_name(args.session_id)
+        session_id = by_name.id if by_name else args.session_id
+    else:
+        all_sessions = mgr.list_sessions()
+        completed = [s for s in all_sessions if s.status in ("completed", "paused", "crashed")]
+        if not completed:
+            print("No sessions to export.", file=sys.stderr)
+            return 1
+        session_id = completed[0].id
+
+    try:
+        meta = mgr.get_session(session_id)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    transcript_path = mgr.get_transcript_path(session_id)
+    if not transcript_path.exists():
+        print(f"ERROR: Transcript not found: {transcript_path}", file=sys.stderr)
+        return 1
+
+    import json
+    messages = []
+    for line in transcript_path.read_text().strip().splitlines():
+        try:
+            messages.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    # Fill in metadata from transcript if missing (lobby overrides don't always update meta)
+    for m in messages:
+        if m.get("role") == "moderator" and m.get("metadata", {}).get("kind") == "topic":
+            if not meta.topic:
+                meta.topic = m["content"]
+            session = m.get("metadata", {}).get("session", {})
+            if session.get("mode"):
+                meta.mode = session["mode"]
+            break
+
+    md = _format_export_markdown(meta, messages)
+
+    if args.output:
+        from pathlib import Path
+        Path(args.output).write_text(md)
+        print(f"Exported to {args.output}")
+    else:
+        print(md)
+
+    return 0
+
+
+def _format_export_markdown(meta, messages: list[dict]) -> str:
+    """Format a session transcript as readable Markdown."""
+    lines = []
+
+    # Header
+    lines.append(f"# Relay Session: {meta.topic[:80] or '(no topic)'}")
+    lines.append("")
+    lines.append("| Field | Value |")
+    lines.append("|-------|-------|")
+    lines.append(f"| Session ID | `{meta.id[:8]}` |")
+    if meta.name:
+        lines.append(f"| Name | {meta.name} |")
+    lines.append(f"| Mode | {getattr(meta, 'mode', 'freeform')} |")
+    lines.append(f"| Status | {meta.status} |")
+    lines.append(f"| Turns | {meta.turns_completed} |")
+    lines.append(f"| Agents | {meta.left_agent_name} ({meta.left_provider}) vs {meta.right_agent_name} ({meta.right_provider}) |")
+    lines.append(f"| Models | {meta.left_model} / {meta.right_model} |")
+    lines.append(f"| Created | {meta.created} |")
+    lines.append(f"| Updated | {meta.updated} |")
+    lines.append("")
+    lines.append("---")
+    lines.append("")
+
+    # Messages
+    for msg in messages:
+        role = msg.get("role", "")
+        author = msg.get("author", "")
+        content = msg.get("content", "")
+        metadata = msg.get("metadata", {})
+        kind = metadata.get("kind", "")
+        turn = metadata.get("turn", "")
+        model = metadata.get("model", "")
+
+        if role == "moderator":
+            if kind == "topic":
+                lines.append(f"## Topic")
+                lines.append("")
+                lines.append(content)
+                lines.append("")
+            else:
+                lines.append(f"> **[{author}]:** {content}")
+                lines.append("")
+
+        elif role == "agent":
+            model_tag = f" `[{model}]`" if model else ""
+            lines.append(f"### Turn {turn} — {author}{model_tag}")
+            lines.append("")
+            lines.append(content)
+            lines.append("")
+
+        elif role == "system":
+            if kind == "attempt_failed":
+                speaker = metadata.get("speaker", "?")
+                lines.append(f"*[{speaker} failed: {content}]*")
+                lines.append("")
+            elif kind == "policy_gate":
+                decision = metadata.get("decision", "?")
+                lines.append(f"*[Policy {decision}: {content}]*")
+                lines.append("")
+            elif kind == "pause":
+                lines.append(f"*[Session paused: {content}]*")
+                lines.append("")
+            # Skip other system messages (traces, etc.)
+
+    return "\n".join(lines)
 
 
 def _cmd_delete(argv: list[str]) -> int:

@@ -121,9 +121,8 @@ class SessionManager:
         return meta
 
     def get_session(self, session_id: str) -> SessionMeta:
-        meta_path = self._sessions_dir / session_id / "meta.json"
-        if not meta_path.exists():
-            raise ValueError(f"Session not found: {session_id}")
+        full_id = self._resolve_id(session_id)
+        meta_path = self._sessions_dir / full_id / "meta.json"
         data = json.loads(meta_path.read_text())
         return SessionMeta.from_dict(data)
 
@@ -219,14 +218,28 @@ class SessionManager:
         pid_path = self._sessions_dir / session_id / "engine.pid"
         pid_path.unlink(missing_ok=True)
 
+    def _resolve_id(self, session_id: str) -> str:
+        """Resolve a short ID prefix to a full session ID."""
+        full_path = self._sessions_dir / session_id
+        if full_path.exists():
+            return session_id
+        self._ensure_dirs()
+        matches = [d.name for d in self._sessions_dir.iterdir()
+                   if d.is_dir() and d.name.startswith(session_id)]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ValueError(f"Ambiguous session ID prefix: {session_id}")
+        raise ValueError(f"Session not found: {session_id}")
+
     def get_transcript_path(self, session_id: str) -> Path:
-        return self._sessions_dir / session_id / "transcript.jsonl"
+        return self._sessions_dir / self._resolve_id(session_id) / "transcript.jsonl"
 
     def get_workspace_path(self, session_id: str) -> Path:
-        return self._sessions_dir / session_id / "workspace"
+        return self._sessions_dir / self._resolve_id(session_id) / "workspace"
 
     def get_session_dir(self, session_id: str) -> Path:
-        return self._sessions_dir / session_id
+        return self._sessions_dir / self._resolve_id(session_id)
 
     def _write_meta(self, session_id: str, meta: SessionMeta) -> None:
         meta_path = self._sessions_dir / session_id / "meta.json"
