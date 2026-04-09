@@ -432,6 +432,13 @@ def _build_new_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode", choices=["discuss", "debate", "build", "interview", "freeform"],
                         default="discuss", help="Session mode (default: discuss).")
     parser.add_argument("--build", action="store_true", help="Alias for --mode build.")
+    parser.add_argument("--workspace", action="append", default=[], metavar="PATH[:MODE[:ro]]",
+                        help="Mount a directory for agents to read. Repeatable. "
+                             "Mode: sandbox (default) or direct. Add :ro for read-only.")
+    parser.add_argument("--workspace-mode", choices=["sandbox", "direct"], default="sandbox",
+                        help="Default mount mode for --workspace entries (default: sandbox).")
+    parser.add_argument("--read-only", action="store_true",
+                        help="Deny Write/Edit/Bash tools (Claude only — Codex is advisory).")
     parser.add_argument("--tui", action="store_true", help="Launch split-pane terminal UI.")
     parser.add_argument("--web", action="store_true", help="Launch web viewer in browser.")
     parser.add_argument("--port", type=int, default=8411, help="Web viewer port (default: 8411).")
@@ -499,6 +506,21 @@ def _cmd_new(argv: list[str]) -> int:
     if args.build and mode == "discuss":
         mode = "build"
 
+    # Resolve --workspace specs
+    from .mount import resolve_mount_spec
+    mount_specs_resolved = []
+    for spec_str in args.workspace:
+        try:
+            spec = resolve_mount_spec(spec_str, default_mode=args.workspace_mode)
+            # Apply --read-only globally if set
+            if args.read_only:
+                from .mount import MountSpec
+                spec = MountSpec(source=spec.source, mount_mode=spec.mount_mode, read_only=True)
+            mount_specs_resolved.append(spec)
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"ERROR: --workspace {spec_str}: {exc}", file=sys.stderr)
+            return 1
+
     left_name = args.left_name or cfg.left_name
     right_name = args.right_name or cfg.right_name
     left_provider = args.left_provider or cfg.left_provider
@@ -509,18 +531,27 @@ def _cmd_new(argv: list[str]) -> int:
     turns = args.turns or (999_999 if args.no_limit else cfg.turns)
 
     mgr = SessionManager()
-    meta = mgr.create_session(
-        topic=topic,
-        left_agent_name=left_name,
-        right_agent_name=right_name,
-        moderator=moderator,
-        name=args.name or "",
-        mode=mode,
-        left_provider=left_provider,
-        right_provider=right_provider,
-        left_model=left_model,
-        right_model=right_model,
-    )
+    try:
+        meta = mgr.create_session(
+            topic=topic,
+            left_agent_name=left_name,
+            right_agent_name=right_name,
+            moderator=moderator,
+            name=args.name or "",
+            mode=mode,
+            left_provider=left_provider,
+            right_provider=right_provider,
+            left_model=left_model,
+            right_model=right_model,
+            mount_specs=mount_specs_resolved,
+            read_only=args.read_only,
+        )
+    except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    # Build the runtime mount_paths list from the resolved targets
+    mount_paths = [Path(spec_dict["target"]) for spec_dict in meta.mount_specs]
 
     moderator_events = load_moderator_events(args.moderator_script)
     left_instruction = args.left_instruction or DEFAULT_LEFT_INSTRUCTION
@@ -574,6 +605,8 @@ def _cmd_new(argv: list[str]) -> int:
                 on_stream_chunk=on_stream_chunk,
                 on_activity=on_activity,
                 workspace_path=ws_path,
+                mount_paths=mount_paths,
+                read_only=args.read_only,
             )
 
         try:
@@ -608,6 +641,8 @@ def _cmd_new(argv: list[str]) -> int:
                 on_stream_chunk=on_stream_chunk,
                 on_activity=on_activity,
                 workspace_path=ws_path,
+                mount_paths=mount_paths,
+                read_only=args.read_only,
             )
 
         try:
@@ -649,7 +684,14 @@ def _cmd_new(argv: list[str]) -> int:
             elif msg.role != "system":
                 print(f"\n  {msg.seq:03d} [{msg.author}]\n{msg.content}\n", flush=True)
 
-        runner = RelayRunner(config=config, out_path=transcript_path, workspace_path=ws_path, on_commit=_live_print)
+        runner = RelayRunner(
+            config=config,
+            out_path=transcript_path,
+            workspace_path=ws_path,
+            mount_paths=mount_paths,
+            read_only=args.read_only,
+            on_commit=_live_print,
+        )
         try:
             result = runner.run()
         except ValueError as exc:
@@ -765,6 +807,10 @@ def _cmd_resume(argv: list[str]) -> int:
         workspace_path = ws
         meta = mgr.update_status(session_id, meta.status)  # keep status, just refresh
 
+    # Restore mounts from session metadata (already on disk from create_session)
+    mount_paths = [Path(spec_dict["target"]) for spec_dict in meta.mount_specs]
+    resume_read_only = meta.read_only
+
     starting_count = len(TranscriptStore(transcript_path).read())
     mgr.update_status(session_id, "running")
     mgr.write_pid(session_id)
@@ -788,6 +834,8 @@ def _cmd_resume(argv: list[str]) -> int:
                 on_stream_chunk=on_stream_chunk,
                 on_activity=on_activity,
                 workspace_path=workspace_path,
+                mount_paths=mount_paths,
+                read_only=resume_read_only,
             )
 
         try:
@@ -820,6 +868,8 @@ def _cmd_resume(argv: list[str]) -> int:
                 on_stream_chunk=on_stream_chunk,
                 on_activity=on_activity,
                 workspace_path=workspace_path,
+                mount_paths=mount_paths,
+                read_only=resume_read_only,
             )
 
         try:
@@ -858,7 +908,14 @@ def _cmd_resume(argv: list[str]) -> int:
             elif msg.role != "system":
                 print(f"\n  {msg.seq:03d} [{msg.author}]\n{msg.content}\n", flush=True)
 
-        runner = RelayRunner(config=config, out_path=transcript_path, workspace_path=workspace_path, on_commit=_live_print)
+        runner = RelayRunner(
+            config=config,
+            out_path=transcript_path,
+            workspace_path=workspace_path,
+            mount_paths=mount_paths,
+            read_only=resume_read_only,
+            on_commit=_live_print,
+        )
         try:
             result = runner.run(resume=True)
         except ValueError as exc:
