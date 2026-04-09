@@ -16,7 +16,6 @@ class TestModeSpec:
     def test_get_mode_returns_correct_spec(self):
         spec = get_mode("build")
         assert spec.name == "build"
-        assert spec.workspace_required is True
         assert spec.left_role == "builder"
         assert spec.right_role == "reviewer"
 
@@ -28,15 +27,13 @@ class TestModeSpec:
         for name, spec in MODES.items():
             assert spec.name == name
             assert isinstance(spec.description, str) and spec.description
-            assert isinstance(spec.workspace_required, bool)
             assert isinstance(spec.left_role, str) and spec.left_role
             assert isinstance(spec.right_role, str) and spec.right_role
 
-    def test_build_mode_requires_workspace(self):
-        assert get_mode("build").workspace_required is True
-
-    def test_discuss_mode_no_workspace(self):
-        assert get_mode("discuss").workspace_required is False
+    def test_build_mode_has_builder_reviewer_roles(self):
+        spec = get_mode("build")
+        assert spec.left_role == "builder"
+        assert spec.right_role == "reviewer"
 
     def test_debate_has_agreement_detection(self):
         assert get_mode("debate").detect_agreement is True

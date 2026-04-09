@@ -109,10 +109,8 @@ class SessionManager:
         session_dir = self._sessions_dir / session_id
         session_dir.mkdir(parents=True)
 
-        from .modes import get_mode
-        mode_spec = get_mode(mode)
         ws_dir = session_dir / "workspace"
-        if mode_spec.workspace_required:
+        if mode == "build":
             ws_dir.mkdir()
             (ws_dir / "shared").mkdir()
             for agent_name in (left_agent_name.lower(), right_agent_name.lower()):

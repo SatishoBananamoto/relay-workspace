@@ -579,8 +579,7 @@ def _cmd_new(argv: list[str]) -> int:
     )
 
     transcript_path = mgr.get_transcript_path(meta.id)
-    from .modes import get_mode
-    ws_path = mgr.get_workspace_path(meta.id) if get_mode(mode).workspace_required else None
+    ws_path = mgr.get_workspace_path(meta.id) if mode == "build" else None
     mgr.update_status(meta.id, "running")
     mgr.write_pid(meta.id)
 
@@ -812,14 +811,12 @@ def _cmd_resume(argv: list[str]) -> int:
 
     # Handle --build upgrade on resume
     # Determine mode: CLI override > session metadata > default
-    from .modes import get_mode
     resume_mode = args.mode or getattr(meta, "mode", "freeform")
     if args.build and not args.mode:
         resume_mode = "build"
-    mode_spec = get_mode(resume_mode)
 
     workspace_path = None
-    if mode_spec.workspace_required:
+    if resume_mode == "build":
         ws = mgr.get_workspace_path(session_id)
         if not ws.exists():
             from .workspace import WorkspaceManager

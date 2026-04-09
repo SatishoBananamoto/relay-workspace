@@ -13,10 +13,14 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class ModeSpec:
-    """Defines a relay interaction mode."""
+    """Defines a relay interaction mode.
+
+    Note: Workspace creation (sandbox/direct mounts) is now driven by
+    user-supplied --workspace flags, not by mode. Build mode still creates
+    inbox/outbox scaffolding implicitly — see SessionManager.create_session.
+    """
     name: str
     description: str
-    workspace_required: bool
     left_role: str
     right_role: str
     left_instruction_template: str
@@ -30,7 +34,6 @@ MODES: dict[str, ModeSpec] = {
     "discuss": ModeSpec(
         name="discuss",
         description="Agents discuss the topic directly with each other. You observe and interject.",
-        workspace_required=False,
         left_role="peer",
         right_role="peer",
         left_instruction_template=(
@@ -47,7 +50,6 @@ MODES: dict[str, ModeSpec] = {
     "debate": ModeSpec(
         name="debate",
         description="Agents take opposing positions and challenge each other. You moderate.",
-        workspace_required=False,
         left_role="opponent",
         right_role="opponent",
         left_instruction_template=(
@@ -65,7 +67,6 @@ MODES: dict[str, ModeSpec] = {
     "build": ModeSpec(
         name="build",
         description="One agent builds (code, specs, plans), the other reviews.",
-        workspace_required=True,
         left_role="builder",
         right_role="reviewer",
         left_instruction_template=(
@@ -84,7 +85,6 @@ MODES: dict[str, ModeSpec] = {
     "interview": ModeSpec(
         name="interview",
         description="One agent asks probing questions, the other answers with depth.",
-        workspace_required=False,
         left_role="interviewer",
         right_role="interviewee",
         left_instruction_template=(
@@ -100,7 +100,6 @@ MODES: dict[str, ModeSpec] = {
     "freeform": ModeSpec(
         name="freeform",
         description="No special instructions. Both agents respond to the topic and each other freely.",
-        workspace_required=False,
         left_role="agent",
         right_role="agent",
         left_instruction_template="",

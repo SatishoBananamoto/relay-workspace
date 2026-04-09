@@ -275,7 +275,6 @@ class WebViewer:
                         "right_role": spec.right_role,
                         "left_instruction": spec.left_instruction_template,
                         "right_instruction": spec.right_instruction_template,
-                        "workspace_required": spec.workspace_required,
                     }
                     for name, spec in MODES.items()
                 }
