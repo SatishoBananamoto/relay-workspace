@@ -36,6 +36,8 @@ class SessionMeta:
     right_provider: str = "mock"
     left_model: str = "mirror"
     right_model: str = "mirror"
+    mount_specs: list[dict] = field(default_factory=list)
+    read_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -79,6 +81,8 @@ class SessionManager:
         right_provider: str = "mock",
         left_model: str = "mirror",
         right_model: str = "mirror",
+        mount_specs: list | None = None,
+        read_only: bool = False,
     ) -> SessionMeta:
         self._ensure_dirs()
         session_id = str(uuid.uuid4())
@@ -99,6 +103,7 @@ class SessionManager:
             right_provider=right_provider,
             left_model=left_model,
             right_model=right_model,
+            read_only=read_only,
         )
 
         session_dir = self._sessions_dir / session_id
@@ -106,16 +111,37 @@ class SessionManager:
 
         from .modes import get_mode
         mode_spec = get_mode(mode)
+        ws_dir = session_dir / "workspace"
         if mode_spec.workspace_required:
-            ws = session_dir / "workspace"
-            ws.mkdir()
-            (ws / "shared").mkdir()
+            ws_dir.mkdir()
+            (ws_dir / "shared").mkdir()
             for agent_name in (left_agent_name.lower(), right_agent_name.lower()):
-                agent_dir = ws / agent_name
+                agent_dir = ws_dir / agent_name
                 agent_dir.mkdir()
                 (agent_dir / "inbox.md").write_text("")
                 (agent_dir / "outbox.md").write_text("")
-            (ws / "reviews").mkdir()
+            (ws_dir / "reviews").mkdir()
+
+        # Apply mount specs (sandbox copies / direct mounts)
+        if mount_specs:
+            from .mount import MountSpec, mount as mount_dispatch
+            ws_dir.mkdir(exist_ok=True)
+            mount_points = []
+            for spec in mount_specs:
+                if isinstance(spec, MountSpec):
+                    point = mount_dispatch(spec, ws_dir)
+                else:
+                    # Accept dict form too
+                    point = mount_dispatch(
+                        MountSpec(
+                            source=Path(spec["source"]).expanduser().resolve(),
+                            mount_mode=spec.get("mount_mode", "sandbox"),
+                            read_only=bool(spec.get("read_only", False)),
+                        ),
+                        ws_dir,
+                    )
+                mount_points.append(point.to_dict())
+            meta.mount_specs = mount_points
 
         self._write_meta(session_id, meta)
         return meta
@@ -180,11 +206,45 @@ class SessionManager:
         shutil.move(str(src), str(dst))
 
     def delete_session(self, session_id: str) -> None:
-        """Permanently delete a session directory."""
-        session_dir = self._sessions_dir / session_id
+        """Permanently delete a session directory.
+
+        Cleans up mount points (git worktrees, sandbox copies) before
+        removing the session directory. Direct mounts are never touched.
+        """
+        full_id = self._resolve_id(session_id)
+        session_dir = self._sessions_dir / full_id
         if not session_dir.exists():
             raise ValueError(f"Session not found: {session_id}")
+
+        # Clean up mounts before removing the session dir
+        try:
+            meta = self.get_session(full_id)
+            if meta.mount_specs:
+                from .mount import MountPoint, cleanup_mount
+                for spec_dict in meta.mount_specs:
+                    try:
+                        point = MountPoint.from_dict(spec_dict)
+                        cleanup_mount(point)
+                    except Exception:
+                        # Best-effort cleanup; don't block session deletion
+                        pass
+        except (ValueError, FileNotFoundError):
+            pass  # No meta or unreadable — proceed with rmtree
+
         shutil.rmtree(session_dir)
+
+    def get_mount_points(self, session_id: str) -> list:
+        """Return list of MountPoint objects for a session."""
+        from .mount import MountPoint
+        meta = self.get_session(session_id)
+        return [MountPoint.from_dict(spec) for spec in meta.mount_specs]
+
+    def add_mount(self, session_id: str, mount_point_dict: dict) -> None:
+        """Append a mount point to an existing session's metadata."""
+        full_id = self._resolve_id(session_id)
+        meta = self.get_session(full_id)
+        meta.mount_specs.append(mount_point_dict)
+        self._write_meta(full_id, meta)
 
     def write_pid(self, session_id: str) -> None:
         """Write current PID to session directory."""

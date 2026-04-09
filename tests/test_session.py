@@ -257,3 +257,198 @@ model = "haiku"
     assert cfg.moderator == "Satisho"
     assert cfg.right_model == "gpt-5.4"
     assert cfg.turns == 20
+
+
+# ── Mount specs persistence ──────────────────────────────────────────────────
+
+
+@pytest.fixture
+def fake_kv_dir(tmp_path: Path):
+    """Throwaway directory simulating ~/kv-secrets — never touches the real one."""
+    src = tmp_path / "kv_secrets_dup"
+    src.mkdir()
+    (src / "main.py").write_text("print('fake')\n")
+    (src / "secrets.env").write_text("KEY=fake\n")
+    return src
+
+
+def test_session_meta_mount_specs_default_empty():
+    meta = SessionMeta(
+        id="x",
+        topic="t",
+        left_agent_name="A",
+        right_agent_name="B",
+        moderator="m",
+        status="new",
+        created="2026-04-01T00:00:00Z",
+        updated="2026-04-01T00:00:00Z",
+    )
+    assert meta.mount_specs == []
+    assert meta.read_only is False
+
+
+def test_session_meta_mount_specs_persist_round_trip():
+    spec = {
+        "source": "/tmp/src",
+        "target": "/tmp/tgt",
+        "mount_mode": "sandbox",
+        "cleanup_kind": "copy",
+        "read_only": True,
+    }
+    meta = SessionMeta(
+        id="x", topic="t",
+        left_agent_name="A", right_agent_name="B",
+        moderator="m", status="new",
+        created="2026-04-01T00:00:00Z",
+        updated="2026-04-01T00:00:00Z",
+        mount_specs=[spec],
+        read_only=True,
+    )
+    data = meta.to_dict()
+    restored = SessionMeta.from_dict(data)
+    assert restored.mount_specs == [spec]
+    assert restored.read_only is True
+
+
+def test_session_meta_backward_compat_no_mounts():
+    """Old session JSON without mount_specs should default to []."""
+    old = {
+        "id": "old", "topic": "t",
+        "left_agent_name": "A", "right_agent_name": "B",
+        "moderator": "m", "status": "new",
+        "created": "2026-01-01T00:00:00Z",
+        "updated": "2026-01-01T00:00:00Z",
+    }
+    restored = SessionMeta.from_dict(old)
+    assert restored.mount_specs == []
+    assert restored.read_only is False
+
+
+def test_create_session_with_sandbox_mount(mgr: SessionManager, fake_kv_dir):
+    from relay_discussion.mount import MountSpec
+    meta = mgr.create_session(
+        topic="Read kv",
+        left_agent_name="Claude",
+        right_agent_name="Codex",
+        mode="discuss",
+        mount_specs=[MountSpec(source=fake_kv_dir, mount_mode="sandbox")],
+    )
+    # Mount target exists under workspace
+    ws = mgr.get_workspace_path(meta.id)
+    target = ws / "kv_secrets_dup"
+    assert target.exists()
+    assert (target / "main.py").read_text() == "print('fake')\n"
+    # Source untouched
+    assert (fake_kv_dir / "main.py").exists()
+    # Meta records the mount
+    assert len(meta.mount_specs) == 1
+    assert meta.mount_specs[0]["mount_mode"] == "sandbox"
+    assert meta.mount_specs[0]["cleanup_kind"] == "copy"
+
+
+def test_create_session_with_direct_mount(mgr: SessionManager, fake_kv_dir):
+    from relay_discussion.mount import MountSpec
+    meta = mgr.create_session(
+        topic="Read kv directly",
+        left_agent_name="Claude",
+        right_agent_name="Codex",
+        mode="discuss",
+        mount_specs=[MountSpec(source=fake_kv_dir, mount_mode="direct")],
+    )
+    # No copy made
+    ws = mgr.get_workspace_path(meta.id)
+    assert not (ws / "kv_secrets_dup").exists() if ws.exists() else True
+    # Meta records target == source
+    assert meta.mount_specs[0]["target"] == str(fake_kv_dir)
+    assert meta.mount_specs[0]["cleanup_kind"] == "none"
+
+
+def test_delete_session_removes_sandbox_copy(mgr: SessionManager, fake_kv_dir):
+    from relay_discussion.mount import MountSpec
+    meta = mgr.create_session(
+        topic="Test",
+        left_agent_name="Claude",
+        right_agent_name="Codex",
+        mode="discuss",
+        mount_specs=[MountSpec(source=fake_kv_dir, mount_mode="sandbox")],
+    )
+    ws = mgr.get_workspace_path(meta.id)
+    target = ws / "kv_secrets_dup"
+    assert target.exists()
+
+    mgr.delete_session(meta.id)
+
+    # Session gone
+    assert not (mgr.relay_dir / "sessions" / meta.id).exists()
+    # Source untouched
+    assert (fake_kv_dir / "main.py").exists()
+
+
+def test_delete_session_does_not_touch_direct_mount(mgr: SessionManager, fake_kv_dir):
+    from relay_discussion.mount import MountSpec
+    meta = mgr.create_session(
+        topic="Test",
+        left_agent_name="Claude",
+        right_agent_name="Codex",
+        mode="discuss",
+        mount_specs=[MountSpec(source=fake_kv_dir, mount_mode="direct")],
+    )
+    mgr.delete_session(meta.id)
+    # Source must still exist
+    assert fake_kv_dir.exists()
+    assert (fake_kv_dir / "main.py").read_text() == "print('fake')\n"
+
+
+def test_build_mode_with_mount_coexist(mgr: SessionManager, fake_kv_dir):
+    """Build mode creates inbox/outbox AND mount lives alongside."""
+    from relay_discussion.mount import MountSpec
+    meta = mgr.create_session(
+        topic="Build with mount",
+        left_agent_name="Claude",
+        right_agent_name="Codex",
+        mode="build",
+        mount_specs=[MountSpec(source=fake_kv_dir, mount_mode="sandbox")],
+    )
+    ws = mgr.get_workspace_path(meta.id)
+    # Build scaffolding
+    assert (ws / "shared").is_dir()
+    assert (ws / "claude" / "inbox.md").exists()
+    assert (ws / "reviews").is_dir()
+    # Mount sibling
+    assert (ws / "kv_secrets_dup" / "main.py").exists()
+
+
+def test_get_mount_points_returns_objects(mgr: SessionManager, fake_kv_dir):
+    from relay_discussion.mount import MountSpec, MountPoint
+    meta = mgr.create_session(
+        topic="t",
+        left_agent_name="Claude",
+        right_agent_name="Codex",
+        mode="discuss",
+        mount_specs=[MountSpec(source=fake_kv_dir, mount_mode="sandbox")],
+    )
+    points = mgr.get_mount_points(meta.id)
+    assert len(points) == 1
+    assert isinstance(points[0], MountPoint)
+    assert points[0].mount_mode == "sandbox"
+
+
+def test_add_mount_appends_to_existing_session(mgr: SessionManager, fake_kv_dir):
+    meta = mgr.create_session(
+        topic="t",
+        left_agent_name="Claude",
+        right_agent_name="Codex",
+        mode="discuss",
+    )
+    assert meta.mount_specs == []
+    new_mount = {
+        "source": str(fake_kv_dir),
+        "target": str(fake_kv_dir),
+        "mount_mode": "direct",
+        "cleanup_kind": "none",
+        "read_only": False,
+    }
+    mgr.add_mount(meta.id, new_mount)
+    reloaded = mgr.get_session(meta.id)
+    assert len(reloaded.mount_specs) == 1
+    assert reloaded.mount_specs[0]["source"] == str(fake_kv_dir)
