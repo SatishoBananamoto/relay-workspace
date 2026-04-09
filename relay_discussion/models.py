@@ -4,6 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable
 
 VALID_PROVIDERS = frozenset({"mock", "openai", "anthropic", "cli-claude", "cli-codex"})
@@ -177,6 +178,8 @@ class RelayConfig:
     )
     use_harness: bool = False
     mode: str = "discuss"
+    mount_paths: list[Path] = field(default_factory=list)
+    read_only: bool = False
 
 
 @dataclass(slots=True)

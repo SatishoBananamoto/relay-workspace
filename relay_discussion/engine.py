@@ -34,6 +34,8 @@ class RelayRunner:
         on_stream_chunk: object | None = None,
         on_activity: object | None = None,
         workspace_path: Path | None = None,
+        mount_paths: list[Path] | None = None,
+        read_only: bool = False,
     ) -> None:
         self.config = config
         self.out_path = out_path
@@ -44,6 +46,8 @@ class RelayRunner:
         self._on_stream_chunk = on_stream_chunk  # Callable[[str], None] (optional)
         self._observer = None  # SessionObserver (optional)
         self._workspace_path = workspace_path
+        self._mount_paths: list[Path] = list(mount_paths or [])
+        self._read_only = read_only
         self._workspace_mgr = None
         if self._workspace_path is not None:
             from .workspace import WorkspaceManager
@@ -75,6 +79,10 @@ class RelayRunner:
             kwargs: dict[str, object] = {}
             if agent.provider in ("cli-claude", "cli-codex") and self._workspace_path:
                 kwargs["workspace_path"] = self._workspace_path
+            if agent.provider in ("cli-claude", "cli-codex") and self._mount_paths:
+                kwargs["mount_paths"] = self._mount_paths
+            if agent.provider in ("cli-claude", "cli-codex") and self._read_only:
+                kwargs["read_only"] = True
             if agent.provider in ("cli-claude", "cli-codex") and agent.model and agent.model != "mirror":
                 kwargs["model"] = agent.model
             # Apply any pending effort setting
