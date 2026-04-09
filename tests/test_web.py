@@ -88,32 +88,35 @@ class TestEventBus:
         """Concurrent publish and subscribe don't crash."""
         bus = EventBus()
         errors = []
+        # Subscribe BEFORE publisher starts so live events are captured.
+        # Use "message" type so events go to history (replayable).
+        q1 = bus.subscribe()
+        q2 = bus.subscribe()
 
         def publisher():
             try:
                 for i in range(100):
-                    bus.publish({"type": "msg", "data": i})
+                    bus.publish({"type": "message", "data": i})
             except Exception as e:
                 errors.append(e)
 
-        def subscriber():
+        def subscriber(q):
             try:
-                q = bus.subscribe()
                 count = 0
-                while count < 50:
+                while count < 100:
                     try:
-                        q.get(timeout=0.1)
+                        q.get(timeout=0.5)
                         count += 1
                     except Exception:
-                        pass
+                        break  # idle = done
                 bus.unsubscribe(q)
             except Exception as e:
                 errors.append(e)
 
         threads = [
             threading.Thread(target=publisher),
-            threading.Thread(target=subscriber),
-            threading.Thread(target=subscriber),
+            threading.Thread(target=subscriber, args=(q1,)),
+            threading.Thread(target=subscriber, args=(q2,)),
         ]
         for t in threads:
             t.start()
@@ -406,3 +409,42 @@ class TestHTTPIntegration:
         entries = self.mq.drain()
         assert len(entries) == 1
         assert entries[0].content == "Push harder on the design."
+
+
+# ---------------------------------------------------------------------------
+# Workspace mounting in lobby HTML
+# ---------------------------------------------------------------------------
+
+
+class TestLobbyWorkspaceUI:
+    def test_html_has_workspace_section(self):
+        from relay_discussion.web import _INDEX_HTML
+        assert 'id="workspace-list"' in _INDEX_HTML
+        assert 'id="lobby-read-only"' in _INDEX_HTML
+        assert "addWorkspaceRow" in _INDEX_HTML
+        assert "collectWorkspaceRows" in _INDEX_HTML
+
+    def test_html_has_mount_mode_options(self):
+        from relay_discussion.web import _INDEX_HTML
+        # Workspace row template should have sandbox/direct options
+        assert 'value="sandbox"' in _INDEX_HTML
+        assert 'value="direct"' in _INDEX_HTML
+
+    def test_trigger_start_captures_workspaces(self):
+        from relay_discussion.moderator import ModeratorInputQueue
+        from relay_discussion.web import WebViewer
+
+        viewer = WebViewer(ModeratorInputQueue())
+        viewer.trigger_start({
+            "topic": "test",
+            "workspaces": [
+                {"path": "/tmp/foo", "mount_mode": "sandbox"},
+                {"path": "/tmp/bar", "mount_mode": "direct"},
+            ],
+            "read_only": True,
+        })
+        assert viewer._config_overrides.get("workspaces") == [
+            {"path": "/tmp/foo", "mount_mode": "sandbox"},
+            {"path": "/tmp/bar", "mount_mode": "direct"},
+        ]
+        assert viewer._config_overrides.get("read_only") is True

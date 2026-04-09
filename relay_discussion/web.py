@@ -912,6 +912,18 @@ _INDEX_HTML = """<!DOCTYPE html>
       </div>
     </div>
 
+    <!-- Workspace -->
+    <div style="margin-bottom:16px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <span style="font-size:11px;color:#8b949e;text-transform:uppercase">Workspace (mount existing dirs)</span>
+        <button type="button" onclick="addWorkspaceRow()" style="padding:3px 10px;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;font-family:inherit;cursor:pointer">+ Add directory</button>
+      </div>
+      <div id="workspace-list"></div>
+      <label style="font-size:12px;color:#8b949e;display:flex;align-items:center;gap:6px;margin-top:8px">
+        <input type="checkbox" id="lobby-read-only"> Read-only (deny Write/Edit/Bash)
+      </label>
+    </div>
+
     <!-- Turns -->
     <div style="display:flex;gap:16px;align-items:center;margin-bottom:20px">
       <div>
@@ -1646,6 +1658,12 @@ async function lobbyStart() {
   overrides.right_model = document.getElementById('lobby-right-model').value;
   overrides.left_effort = document.getElementById('lobby-left-effort').value;
   overrides.right_effort = document.getElementById('lobby-right-effort').value;
+
+  // Workspace mounts
+  const workspaces = collectWorkspaceRows();
+  if (workspaces.length) overrides.workspaces = workspaces;
+  overrides.read_only = document.getElementById('lobby-read-only').checked;
+
   await fetch('/start', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -1655,6 +1673,45 @@ async function lobbyStart() {
   // Update sidebar model/effort to match what was selected
   if (agentInfos[0]) updateModelDisplay(agentInfos[0].name, overrides.left_model, overrides.left_effort);
   if (agentInfos[1]) updateModelDisplay(agentInfos[1].name, overrides.right_model, overrides.right_effort);
+}
+
+// --- Workspace mount rows ---
+let workspaceRowCounter = 0;
+
+function addWorkspaceRow() {
+  const list = document.getElementById('workspace-list');
+  const id = ++workspaceRowCounter;
+  const row = document.createElement('div');
+  row.className = 'workspace-row';
+  row.id = 'ws-row-' + id;
+  row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center';
+  row.innerHTML = `
+    <input type="text" placeholder="/path/to/dir" class="ws-path"
+      style="flex:1;padding:5px 8px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:12px;font-family:inherit">
+    <select class="ws-mode" style="padding:5px;background:#161b22;border:1px solid #30363d;border-radius:4px;color:#c9d1d9;font-size:11px;font-family:inherit">
+      <option value="sandbox" selected>sandbox</option>
+      <option value="direct">direct</option>
+    </select>
+    <button type="button" onclick="removeWorkspaceRow(${id})"
+      style="padding:5px 9px;background:#21262d;border:1px solid #30363d;border-radius:4px;color:#f85149;font-size:11px;cursor:pointer">×</button>
+  `;
+  list.appendChild(row);
+}
+
+function removeWorkspaceRow(id) {
+  const row = document.getElementById('ws-row-' + id);
+  if (row) row.remove();
+}
+
+function collectWorkspaceRows() {
+  const rows = document.querySelectorAll('.workspace-row');
+  const out = [];
+  rows.forEach(row => {
+    const path = row.querySelector('.ws-path').value.trim();
+    if (!path) return;
+    out.push({path, mount_mode: row.querySelector('.ws-mode').value});
+  });
+  return out;
 }
 
 

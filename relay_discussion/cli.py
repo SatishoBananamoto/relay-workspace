@@ -629,10 +629,34 @@ def _cmd_new(argv: list[str]) -> int:
         from .web import run_relay_with_web
 
         mq = ModeratorInputQueue()
+        # Mutable holder so the closure sees lobby-mounted paths
+        runtime_state = {
+            "mount_paths": list(mount_paths),
+            "read_only": args.read_only,
+        }
 
         def runner_factory(moderator_queue=None, on_commit=None, on_stream_chunk=None, on_activity=None, config_overrides=None):
             if config_overrides:
                 _apply_config_overrides(config, config_overrides)
+                # Apply workspaces from lobby
+                if config_overrides.get("workspaces"):
+                    from .mount import resolve_mount_spec, mount as mount_dispatch, MountSpec
+                    ws_dir = mgr.get_workspace_path(meta.id)
+                    ws_dir.mkdir(parents=True, exist_ok=True)
+                    for entry in config_overrides["workspaces"]:
+                        try:
+                            spec = MountSpec(
+                                source=Path(entry["path"]).expanduser().resolve(),
+                                mount_mode=entry.get("mount_mode", "sandbox"),
+                                read_only=bool(config_overrides.get("read_only", False)),
+                            )
+                            point = mount_dispatch(spec, ws_dir)
+                            mgr.add_mount(meta.id, point.to_dict())
+                            runtime_state["mount_paths"].append(point.target)
+                        except (FileNotFoundError, NotADirectoryError, ValueError) as exc:
+                            print(f"Mount failed for {entry.get('path')}: {exc}", file=sys.stderr)
+                if config_overrides.get("read_only"):
+                    runtime_state["read_only"] = True
             return RelayRunner(
                 config=config,
                 out_path=transcript_path,
@@ -641,8 +665,8 @@ def _cmd_new(argv: list[str]) -> int:
                 on_stream_chunk=on_stream_chunk,
                 on_activity=on_activity,
                 workspace_path=ws_path,
-                mount_paths=mount_paths,
-                read_only=args.read_only,
+                mount_paths=runtime_state["mount_paths"],
+                read_only=runtime_state["read_only"],
             )
 
         try:
