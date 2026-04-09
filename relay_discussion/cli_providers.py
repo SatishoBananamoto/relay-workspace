@@ -109,11 +109,14 @@ class CliClaudeProvider(BaseProvider):
         model: str = "opus",
         effort: str = "max",
         workspace_path: Path | str | None = None,
+        mount_paths: list[Path] | list[str] | None = None,
+        read_only: bool = False,
         timeout: int | None = None,
     ) -> None:
         self._model = model
         self._effort = effort
         self._workspace_path = Path(workspace_path) if workspace_path else None
+        self._mount_paths: list[Path] = [Path(p) for p in (mount_paths or [])]
         self._timeout = timeout
         self._workspace_mgr = None
         if self._workspace_path:
@@ -123,13 +126,29 @@ class CliClaudeProvider(BaseProvider):
         self._allowed_tools: list[str] = list(_DEFAULT_TOOLS)
         self._denied_tools: set[str] = set()
         self._permission_mode: str = "auto"
+        self._read_only: bool = False
         self.last_actual_model: str | None = None  # captured from response
+        if read_only:
+            self.set_read_only(True)
 
     def set_model(self, model: str) -> None:
         self._model = model
 
     def set_effort(self, effort: str) -> None:
         self._effort = effort
+
+    def set_read_only(self, enabled: bool) -> None:
+        """Toggle read-only mode by adding/removing Write/Edit/Bash from denied tools."""
+        self._read_only = enabled
+        readonly_denied = {"Write", "Edit", "Bash"}
+        if enabled:
+            self._denied_tools.update(readonly_denied)
+        else:
+            self._denied_tools.difference_update(readonly_denied)
+
+    def add_mount_path(self, path: Path | str) -> None:
+        """Add a directory to the list exposed via --add-dir."""
+        self._mount_paths.append(Path(path))
 
     def deny_tool(self, tool: str) -> None:
         self._denied_tools.add(tool)
@@ -157,10 +176,21 @@ class CliClaudeProvider(BaseProvider):
         self._on_tool_event = callback
 
     def _permission_flags(self) -> list[str]:
-        """Build CLI flags for permissions. Called each turn."""
+        """Build CLI flags for permissions. Called each turn.
+
+        Emits one --add-dir per directory in the union of:
+          - workspace_path (build-mode inbox/outbox scaffolding)
+          - mount_paths (user-mounted directories)
+        """
         flags: list[str] = []
+        all_dirs: list[Path] = []
         if self._workspace_path:
-            flags += ["--add-dir", str(self._workspace_path)]
+            all_dirs.append(self._workspace_path)
+        all_dirs.extend(self._mount_paths)
+
+        if all_dirs:
+            for d in all_dirs:
+                flags += ["--add-dir", str(d)]
             if self._permission_mode == "dangerously-skip-permissions":
                 flags.append("--dangerously-skip-permissions")
             else:
@@ -168,10 +198,10 @@ class CliClaudeProvider(BaseProvider):
                 flags += ["--permission-mode", self._permission_mode]
                 flags += ["--allowedTools", " ".join(effective) if effective else ""]
         else:
-            # No workspace = discuss mode. No tools unless explicitly overridden.
+            # No workspace, no mounts = discuss mode. No tools unless overridden.
             if self._permission_mode == "dangerously-skip-permissions":
                 flags.append("--dangerously-skip-permissions")
-            elif self._denied_tools != set(_DEFAULT_TOOLS):
+            elif self._denied_tools or self._allowed_tools != list(_DEFAULT_TOOLS):
                 # Tools were explicitly modified — respect the override
                 effective = self.get_effective_tools()
                 if effective:
@@ -376,11 +406,15 @@ class CliCodexProvider(BaseProvider):
         model: str | None = None,
         effort: str | None = None,
         workspace_path: Path | str | None = None,
+        mount_paths: list[Path] | list[str] | None = None,
+        read_only: bool = False,
         timeout: int | None = None,
     ) -> None:
         self._model = model  # e.g. "gpt-5.4", "o3", "o4-mini"
         self._effort = effort  # e.g. "xhigh", "high", "medium", "low"
         self._workspace_path = Path(workspace_path) if workspace_path else None
+        self._mount_paths: list[Path] = [Path(p) for p in (mount_paths or [])]
+        self._read_only: bool = read_only
         self._timeout = timeout
         self._workspace_mgr = None
         if self._workspace_path:
@@ -396,6 +430,20 @@ class CliCodexProvider(BaseProvider):
 
     def set_effort(self, effort: str) -> None:
         self._effort = effort
+
+    def set_read_only(self, enabled: bool) -> None:
+        """No-op stub. Codex CLI lacks granular tool deny.
+
+        TODO: revisit when Codex supports per-tool restrictions.
+        For now, mounted directories in read_only mode are advisory —
+        the agent is told via instruction not to write, but nothing
+        enforces it at the CLI level.
+        """
+        self._read_only = enabled
+
+    def add_mount_path(self, path: Path | str) -> None:
+        """Add a directory to the list exposed via --add-dir."""
+        self._mount_paths.append(Path(path))
 
     @property
     def on_tool_event(self):
@@ -441,8 +489,13 @@ class CliCodexProvider(BaseProvider):
                 cmd += ["-c", f"model_reasoning_effort={self._effort}"]
             if self._workspace_path:
                 cmd += ["--add-dir", str(self._workspace_path)]
+            for mp in self._mount_paths:
+                cmd += ["--add-dir", str(mp)]
         else:
             cmd = ["codex", "exec", "resume", "--skip-git-repo-check", self._session_id]
+            # Resume preserves session, but we still need --add-dir for mounted paths
+            for mp in self._mount_paths:
+                cmd += ["--add-dir", str(mp)]
 
         cmd += ["--json", "-o", str(out_file)]
 

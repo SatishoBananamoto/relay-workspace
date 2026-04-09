@@ -249,6 +249,144 @@ class TestCliClaudeProvider:
         assert "--permission-mode" in captured_cmd
         assert "--allowedTools" in captured_cmd
 
+    def test_multiple_mount_paths(self, tmp_path):
+        """Provider emits one --add-dir per mount path."""
+        provider = CliClaudeProvider(
+            mount_paths=[tmp_path / "kv-secrets", tmp_path / "kv-v2"]
+        )
+        agent = AgentConfig(name="Claude", provider="cli-claude")
+        transcript = [_make_message(1, "moderator", "Satisho", "Hello")]
+
+        captured_cmd = []
+
+        def mock_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0,
+                stdout=_claude_json_response("ok"),
+                stderr="",
+            )
+
+        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+            provider.generate(agent, transcript, turn=1)
+
+        # Two --add-dir entries
+        add_dir_count = captured_cmd.count("--add-dir")
+        assert add_dir_count == 2
+        assert str(tmp_path / "kv-secrets") in captured_cmd
+        assert str(tmp_path / "kv-v2") in captured_cmd
+        assert "--allowedTools" in captured_cmd
+
+    def test_workspace_and_mounts_combined(self, tmp_path):
+        """Build-mode workspace + user mounts → all paths in command."""
+        provider = CliClaudeProvider(
+            workspace_path=tmp_path / "ws",
+            mount_paths=[tmp_path / "extra"],
+        )
+        agent = AgentConfig(name="Claude", provider="cli-claude")
+        transcript = [_make_message(1, "moderator", "Satisho", "Hi")]
+        captured_cmd = []
+
+        def mock_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0,
+                stdout=_claude_json_response("ok"),
+                stderr="",
+            )
+
+        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+            provider.generate(agent, transcript, turn=1)
+
+        assert captured_cmd.count("--add-dir") == 2
+        assert str(tmp_path / "ws") in captured_cmd
+        assert str(tmp_path / "extra") in captured_cmd
+
+    def test_set_read_only_denies_write_edit_bash(self):
+        provider = CliClaudeProvider()
+        provider.set_read_only(True)
+        assert "Write" in provider._denied_tools
+        assert "Edit" in provider._denied_tools
+        assert "Bash" in provider._denied_tools
+        # Read/Glob/Grep still allowed
+        effective = provider.get_effective_tools()
+        assert "Read" in effective
+        assert "Glob" in effective
+        assert "Grep" in effective
+        assert "Write" not in effective
+        assert "Edit" not in effective
+        assert "Bash" not in effective
+
+    def test_set_read_only_toggle_off_restores(self):
+        provider = CliClaudeProvider(read_only=True)
+        assert "Write" in provider._denied_tools
+        provider.set_read_only(False)
+        assert "Write" not in provider._denied_tools
+        assert "Edit" not in provider._denied_tools
+        assert "Bash" not in provider._denied_tools
+
+    def test_read_only_constructor_arg(self):
+        provider = CliClaudeProvider(read_only=True)
+        assert provider._read_only is True
+        assert "Write" in provider._denied_tools
+
+    def test_read_only_command_excludes_write_edit_bash(self, tmp_path):
+        """When read_only=True with mounts, --allowedTools must not include Write/Edit/Bash."""
+        provider = CliClaudeProvider(
+            mount_paths=[tmp_path / "src"],
+            read_only=True,
+        )
+        agent = AgentConfig(name="Claude", provider="cli-claude")
+        transcript = [_make_message(1, "moderator", "Satisho", "Hi")]
+        captured_cmd = []
+
+        def mock_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0,
+                stdout=_claude_json_response("ok"),
+                stderr="",
+            )
+
+        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+            provider.generate(agent, transcript, turn=1)
+
+        # Find the --allowedTools value
+        idx = captured_cmd.index("--allowedTools")
+        allowed_value = captured_cmd[idx + 1]
+        assert "Write" not in allowed_value
+        assert "Edit" not in allowed_value
+        assert "Bash" not in allowed_value
+        assert "Read" in allowed_value
+        assert "Glob" in allowed_value
+        assert "Grep" in allowed_value
+
+    def test_no_mounts_no_workspace_no_tools(self):
+        """Discuss mode default: no mounts, no workspace → no --add-dir or tools."""
+        provider = CliClaudeProvider()
+        agent = AgentConfig(name="Claude", provider="cli-claude")
+        transcript = [_make_message(1, "moderator", "Satisho", "Hi")]
+        captured_cmd = []
+
+        def mock_run(cmd, **kwargs):
+            captured_cmd.extend(cmd)
+            return subprocess.CompletedProcess(
+                args=cmd, returncode=0,
+                stdout=_claude_json_response("ok"),
+                stderr="",
+            )
+
+        with patch("relay_discussion.cli_providers.subprocess.run", mock_run):
+            provider.generate(agent, transcript, turn=1)
+
+        assert "--add-dir" not in captured_cmd
+        assert "--allowedTools" not in captured_cmd
+
+    def test_add_mount_path_runtime(self):
+        provider = CliClaudeProvider()
+        provider.add_mount_path("/tmp/mounted")
+        assert Path("/tmp/mounted") in provider._mount_paths
+
 
 # ── CliCodexProvider ──────────────────────────────────────────────────────────
 
@@ -394,6 +532,61 @@ class TestCliCodexProvider:
         assert "--add-dir" in captured_cmd
         assert "/tmp/ws" in captured_cmd
         assert "--full-auto" in captured_cmd
+
+    def test_codex_multiple_mount_paths(self, tmp_path):
+        provider = CliCodexProvider(
+            mount_paths=[tmp_path / "kv-secrets", tmp_path / "kv-v2"]
+        )
+        agent = AgentConfig(name="Codex", provider="cli-codex")
+        transcript = [_make_message(1, "moderator", "Satisho", "Hi")]
+
+        captured_cmd = []
+        mock = _mock_codex_popen(
+            stdout_text=_codex_jsonl_output("ok"),
+            output_file_text="ok",
+            cmd_capture=captured_cmd,
+        )
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock):
+            provider.generate(agent, transcript, turn=1)
+
+        assert captured_cmd.count("--add-dir") == 2
+        assert str(tmp_path / "kv-secrets") in captured_cmd
+        assert str(tmp_path / "kv-v2") in captured_cmd
+
+    def test_codex_workspace_and_mounts_combined(self, tmp_path):
+        provider = CliCodexProvider(
+            workspace_path=tmp_path / "ws",
+            mount_paths=[tmp_path / "extra"],
+        )
+        agent = AgentConfig(name="Codex", provider="cli-codex")
+        transcript = [_make_message(1, "moderator", "Satisho", "Hi")]
+
+        captured_cmd = []
+        mock = _mock_codex_popen(
+            stdout_text=_codex_jsonl_output("ok"),
+            output_file_text="ok",
+            cmd_capture=captured_cmd,
+        )
+        with patch("relay_discussion.cli_providers.subprocess.Popen", mock):
+            provider.generate(agent, transcript, turn=1)
+
+        assert captured_cmd.count("--add-dir") == 2
+        assert str(tmp_path / "ws") in captured_cmd
+        assert str(tmp_path / "extra") in captured_cmd
+
+    def test_codex_set_read_only_is_noop(self):
+        """Codex set_read_only stores state but doesn't enforce."""
+        provider = CliCodexProvider()
+        provider.set_read_only(True)
+        assert provider._read_only is True
+        # No tool deny mechanism — stored as advisory only
+        provider.set_read_only(False)
+        assert provider._read_only is False
+
+    def test_codex_add_mount_path_runtime(self):
+        provider = CliCodexProvider()
+        provider.add_mount_path("/tmp/mounted")
+        assert Path("/tmp/mounted") in provider._mount_paths
 
 
 # ── Provider factory integration ──────────────────────────────────────────────
